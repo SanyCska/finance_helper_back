@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
+    Enum as SAEnum,
     Date,
     DateTime,
     ForeignKey,
@@ -36,6 +37,16 @@ __all__ = [
     "PlanLine",
     "ImportBatch",
 ]
+
+
+def _enum(enum_cls) -> SAEnum:
+    """Строковый enum, одинаково работающий на Postgres и SQLite."""
+    return SAEnum(
+        enum_cls,
+        native_enum=False,
+        length=16,
+        values_callable=lambda cls: [member.value for member in cls],
+    )
 
 
 def _now() -> dt.datetime:
@@ -71,15 +82,15 @@ class Transaction(Base):
     payee: Mapped[str | None] = mapped_column(Text, nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    direction: Mapped[Direction] = mapped_column(String(16))
+    direction: Mapped[Direction] = mapped_column(_enum(Direction))
     amount_original: Mapped[Decimal] = mapped_column(Money(18, 4))
     currency: Mapped[str] = mapped_column(String(16))
 
     amount_base: Mapped[Decimal | None] = mapped_column(Money(18, 4), nullable=True)
     fx_rate: Mapped[Decimal | None] = mapped_column(Money(24, 10), nullable=True)
-    fx_status: Mapped[FxStatus] = mapped_column(String(16), default=FxStatus.PENDING)
+    fx_status: Mapped[FxStatus] = mapped_column(_enum(FxStatus), default=FxStatus.PENDING)
 
-    source: Mapped[TxSource] = mapped_column(String(16), default=TxSource.CSV)
+    source: Mapped[TxSource] = mapped_column(_enum(TxSource), default=TxSource.CSV)
     zen_created_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     zen_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -96,7 +107,7 @@ class FxRate(Base):
     currency: Mapped[str] = mapped_column(String(16), index=True)
     #: сколько единиц базовой валюты стоит одна единица `currency`
     rate_to_base: Mapped[Decimal] = mapped_column(Money(24, 10))
-    source: Mapped[str] = mapped_column(String(32), default="fawazahmed0")
+    source: Mapped[str] = mapped_column(String(32), default="yahoo")
     fetched_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
 
 
