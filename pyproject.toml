@@ -37,5 +37,21 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# Depends/Query/File/Header в значениях по умолчанию — идиома FastAPI, а не ошибка
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.File",
+    "fastapi.Header",
+    "fastapi.Body",
+    "fastapi.Path",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# в conftest переменные окружения выставляются до импорта приложения
+"tests/conftest.py" = ["E402"]
+"migrations/versions/*" = ["E501"]
+
 [tool.uv]
 package = false

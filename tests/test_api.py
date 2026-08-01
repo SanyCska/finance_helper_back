@@ -59,7 +59,9 @@ def add_tx(
         fx_rate=Decimal(1),
         fx_status=FxStatus.OK,
         source=source,
-        zen_created_at=dt.datetime.fromisoformat(f"{day}T10:00:00") if source is TxSource.CSV else None,
+        zen_created_at=(
+            dt.datetime.fromisoformat(f"{day}T10:00:00") if source is TxSource.CSV else None
+        ),
     )
     db.add(transaction)
     db.commit()
@@ -259,7 +261,12 @@ def test_plan_is_saved_and_returned_with_expected_saldo(client: TestClient):
 
     response = client.put(
         "/api/plans/2026-08",
-        json={"lines": [{"title": "Продукты", "amount": "1200"}, {"title": "Кафе", "amount": "650"}]},
+        json={
+            "lines": [
+                {"title": "Продукты", "amount": "1200"},
+                {"title": "Кафе", "amount": "650"},
+            ]
+        },
     )
 
     body = response.json()

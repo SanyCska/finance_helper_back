@@ -120,7 +120,9 @@ def test_import_batch_is_recorded(db: Session, user):
 
 def test_duplicate_created_at_within_one_file_is_counted_once(db: Session, user):
     duplicated = row("2026-07-01", "Кофе", "300", "2026-07-01 09:00:00")
-    report = import_csv(db, user, "zen.csv", build(ROWS[0], duplicated), provider=provider_with_rates())
+    report = import_csv(
+        db, user, "zen.csv", build(ROWS[0], duplicated), provider=provider_with_rates()
+    )
 
     assert report.rows_new == 1
     assert report.rows_duplicate == 1

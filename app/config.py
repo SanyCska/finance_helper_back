@@ -70,7 +70,9 @@ class Settings(BaseSettings):
 
     def is_excluded_category(self, name: str) -> bool:
         normalized = name.strip().casefold()
-        return any(normalized == excluded.strip().casefold() for excluded in self.excluded_categories)
+        return any(
+            normalized == excluded.strip().casefold() for excluded in self.excluded_categories
+        )
 
 
 @lru_cache

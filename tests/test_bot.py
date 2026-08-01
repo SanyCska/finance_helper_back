@@ -30,7 +30,9 @@ def test_report_uses_correct_plural_for_many_duplicates():
 
 
 def test_report_lists_parse_errors():
-    report = ImportReport(rows_new=1, rows_error=2, errors=["строка 5: битая дата", "строка 9: нули"])
+    report = ImportReport(
+        rows_new=1, rows_error=2, errors=["строка 5: битая дата", "строка 9: нули"]
+    )
 
     message = texts.format_import_report(report)
 

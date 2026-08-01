@@ -6,18 +6,20 @@ import datetime as dt
 from decimal import Decimal
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
-    Enum as SAEnum,
     Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
-    JSON,
     String,
     Text,
     UniqueConstraint,
     func,
+)
+from sqlalchemy import (
+    Enum as SAEnum,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -165,4 +167,6 @@ class ImportBatch(Base):
     rows_error: Mapped[int] = mapped_column(Integer, default=0)
     skipped_transfers: Mapped[int] = mapped_column(Integer, default=0)
     errors: Mapped[list | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now, server_default=func.now())
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime, default=_now, server_default=func.now()
+    )

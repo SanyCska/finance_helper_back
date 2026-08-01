@@ -63,7 +63,9 @@ class YahooFxProvider:
         params = {
             "period1": int(dt.datetime.combine(start, dt.time.min).timestamp()),
             # запас в сутки, чтобы последний день попал в диапазон
-            "period2": int(dt.datetime.combine(end + dt.timedelta(days=2), dt.time.min).timestamp()),
+            "period2": int(
+                dt.datetime.combine(end + dt.timedelta(days=2), dt.time.min).timestamp()
+            ),
             "interval": "1d",
         }
         headers = {"User-Agent": "Mozilla/5.0 (compatible; finance-helper/1.0)"}

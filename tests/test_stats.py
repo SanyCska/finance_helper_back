@@ -149,7 +149,8 @@ def test_category_dynamics_returns_point_per_month():
         tx("2026-06-15", "Кофе", "5"),
     ]
 
-    points = stats.category_dynamics(rows, "Кофе", months=[dt.date(2026, 5, 1), dt.date(2026, 6, 1)])
+    window = [dt.date(2026, 5, 1), dt.date(2026, 6, 1)]
+    points = stats.category_dynamics(rows, "Кофе", months=window)
 
     assert [point.amount for point in points] == [Decimal("10"), Decimal("25")]
     assert [point.month for point in points] == [dt.date(2026, 5, 1), dt.date(2026, 6, 1)]
@@ -158,7 +159,8 @@ def test_category_dynamics_returns_point_per_month():
 def test_category_dynamics_fills_months_without_spending_with_zero():
     rows = [tx("2026-06-01", "Кофе", "20")]
 
-    points = stats.category_dynamics(rows, "Кофе", months=[dt.date(2026, 5, 1), dt.date(2026, 6, 1)])
+    window = [dt.date(2026, 5, 1), dt.date(2026, 6, 1)]
+    points = stats.category_dynamics(rows, "Кофе", months=window)
 
     assert points[0].amount == Decimal("0")
 
@@ -193,6 +195,7 @@ def test_average_of_last_months_ignores_current():
         tx("2026-06-01", "Кофе", "200"),
     ]
 
-    averages = stats.category_averages(rows, months=[dt.date(2026, 4, 1), dt.date(2026, 5, 1), dt.date(2026, 6, 1)])
+    window = [dt.date(2026, 4, 1), dt.date(2026, 5, 1), dt.date(2026, 6, 1)]
+    averages = stats.category_averages(rows, months=window)
 
     assert averages["Кофе"] == Decimal("130")

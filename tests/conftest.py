@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import os
 
-os.environ.setdefault("DATABASE_URL", "sqlite+pysqlite:///:memory:")
-os.environ.setdefault("BOT_TOKEN", "123456:TEST-TOKEN")
-os.environ.setdefault("ALLOWED_TELEGRAM_IDS", "42")
+# тесты не должны зависеть от локального .env разработчика
+os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+os.environ["BOT_TOKEN"] = "123456:TEST-TOKEN"
+os.environ["ALLOWED_TELEGRAM_IDS"] = "42"
+os.environ["EXCLUDED_CATEGORIES"] = "Correction"
+os.environ["BASE_CURRENCY"] = "USD"
+os.environ["DEV_BYPASS_AUTH"] = "false"
+os.environ["ENV"] = "test"
 
 import pytest
 from sqlalchemy import create_engine

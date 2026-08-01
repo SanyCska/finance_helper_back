@@ -54,7 +54,9 @@ def get_or_create_user(db, telegram_id: int, username: str | None) -> User:
     return user
 
 
-def run_import(telegram_id: int, username: str | None, filename: str, content: bytes) -> ImportReport:
+def run_import(
+    telegram_id: int, username: str | None, filename: str, content: bytes
+) -> ImportReport:
     """Синхронный импорт в отдельной сессии — вызывается из обработчика документа."""
     with SessionLocal() as db:
         user = get_or_create_user(db, telegram_id, username)

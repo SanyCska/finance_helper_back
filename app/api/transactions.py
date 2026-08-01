@@ -140,7 +140,8 @@ def _own_manual_transaction(db: Session, user: User, transaction_id: int) -> Tra
     if transaction.source is not TxSource.MANUAL:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Операция пришла из выгрузки: правьте её в Дзен-мани, иначе импорт вернёт прежнее значение",
+            "Операция пришла из выгрузки: правьте её в Дзен-мани, "
+            "иначе импорт вернёт прежнее значение",
         )
     return transaction
 
