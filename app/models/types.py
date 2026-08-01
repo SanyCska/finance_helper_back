@@ -30,7 +30,8 @@ class Money(TypeDecorator):
     def process_bind_param(self, value, dialect):
         if value is None:
             return None
-        value = Decimal(str(value))
+        # приводим к точности колонки, чтобы значения не различались хвостовыми нулями
+        value = Decimal(str(value)).quantize(Decimal(1).scaleb(-self.scale))
         if dialect.name == "sqlite":
             return format(value, "f")
         return value
