@@ -92,12 +92,17 @@ class MonthPointOut(BaseModel):
     tx_count: int
 
 
-class CategoryDynamicsOut(BaseModel):
-    category: str
+class DynamicsOut(BaseModel):
+    """Ряд по месяцам: для всех трат или для одной категории."""
+
     points: list[MonthPointOut]
     average: Decimal
     total: Decimal
     delta_pct: Decimal | None
+
+
+class CategoryDynamicsOut(DynamicsOut):
+    category: str
 
 
 class CategoryDiffOut(BaseModel):

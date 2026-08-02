@@ -17,6 +17,7 @@ from app.schemas import (
     CategoryDynamicsOut,
     CategorySliceOut,
     CompareOut,
+    DynamicsOut,
     MonthPointOut,
     MonthsOut,
     MonthSummaryOut,
@@ -111,22 +112,15 @@ def categories(
     return [_slice_out(item) for item in stats.category_breakdown(transactions, previous)]
 
 
-@router.get("/stats/category-dynamics", response_model=CategoryDynamicsOut)
-def category_dynamics(
-    category: str = Query(...),
-    months_count: int = Query(default=12, ge=2, le=48, alias="months"),
-    until: str | None = Query(default=None),
-    user: User = Depends(current_user),
-    db: Session = Depends(get_db),
-) -> CategoryDynamicsOut:
+def _window(months_count: int, until: str | None) -> list[dt.date]:
     last = _month(until) if until else dt.date.today().replace(day=1)
-    window = [stats.shift_month(last, -offset) for offset in reversed(range(months_count))]
+    return [stats.shift_month(last, -offset) for offset in reversed(range(months_count))]
 
-    start, _ = stats.month_bounds(window[0])
-    _, end = stats.month_bounds(window[-1])
-    transactions = stats.fetch_range(db, user.id, start, end)
 
-    points = stats.category_dynamics(transactions, category, window)
+Series = tuple[list[MonthPointOut], Decimal, Decimal, Decimal | None]
+
+
+def _series(points: list[stats.MonthPoint]) -> Series:
     amounts = [point.amount for point in points]
     total = sum(amounts, ZERO)
     average = total / len(points) if points else ZERO
@@ -135,16 +129,53 @@ def category_dynamics(
     if len(amounts) >= 2 and amounts[-2] > 0:
         delta = (amounts[-1] - amounts[-2]) / amounts[-2]
 
+    out = [
+        MonthPointOut(
+            month=stats.format_month(point.month),
+            amount=point.amount,
+            tx_count=point.tx_count,
+        )
+        for point in points
+    ]
+    return out, average, total, delta
+
+
+@router.get("/stats/dynamics", response_model=DynamicsOut)
+def total_dynamics(
+    months_count: int = Query(default=12, ge=2, le=48, alias="months"),
+    until: str | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> DynamicsOut:
+    """Общие траты по месяцам, без разбивки по категориям."""
+    window = _window(months_count, until)
+    start, _ = stats.month_bounds(window[0])
+    _, end = stats.month_bounds(window[-1])
+    transactions = stats.fetch_range(db, user.id, start, end)
+
+    points, average, total, delta = _series(stats.monthly_totals(transactions, window))
+    return DynamicsOut(points=points, average=average, total=total, delta_pct=delta)
+
+
+@router.get("/stats/category-dynamics", response_model=CategoryDynamicsOut)
+def category_dynamics(
+    category: str = Query(...),
+    months_count: int = Query(default=12, ge=2, le=48, alias="months"),
+    until: str | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CategoryDynamicsOut:
+    window = _window(months_count, until)
+    start, _ = stats.month_bounds(window[0])
+    _, end = stats.month_bounds(window[-1])
+    transactions = stats.fetch_range(db, user.id, start, end)
+
+    points, average, total, delta = _series(
+        stats.category_dynamics(transactions, category, window)
+    )
     return CategoryDynamicsOut(
         category=category,
-        points=[
-            MonthPointOut(
-                month=stats.format_month(point.month),
-                amount=point.amount,
-                tx_count=point.tx_count,
-            )
-            for point in points
-        ],
+        points=points,
         average=average,
         total=total,
         delta_pct=delta,

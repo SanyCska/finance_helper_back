@@ -345,6 +345,53 @@ def test_category_dynamics_returns_requested_window(client: TestClient, db: Sess
     assert Decimal(body["delta_pct"]) == Decimal("0.5")
 
 
+def test_total_dynamics_sums_all_categories(client: TestClient, db: Session, user: User):
+    add_tx(db, user, "2026-06-01", "Кофе", "20")
+    add_tx(db, user, "2026-06-02", "Рестики", "80")
+    add_tx(db, user, "2026-07-01", "Кофе", "30")
+
+    body = client.get(
+        "/api/stats/dynamics", params={"months": 3, "until": "2026-07"}
+    ).json()
+
+    assert [point["month"] for point in body["points"]] == ["2026-05", "2026-06", "2026-07"]
+    assert [Decimal(point["amount"]) for point in body["points"]] == [
+        Decimal(0),
+        Decimal("100"),
+        Decimal("30"),
+    ]
+    assert Decimal(body["total"]) == Decimal("130")
+
+
+def test_total_dynamics_excludes_correction(client: TestClient, db: Session, user: User):
+    add_tx(db, user, "2026-07-01", "Кофе", "30")
+    add_tx(db, user, "2026-07-02", "Correction", "999")
+
+    body = client.get("/api/stats/dynamics", params={"months": 2, "until": "2026-07"}).json()
+
+    assert Decimal(body["total"]) == Decimal("30")
+
+
+def test_total_dynamics_counts_operations(client: TestClient, db: Session, user: User):
+    add_tx(db, user, "2026-07-01", "Кофе", "30")
+    add_tx(db, user, "2026-07-02", "Рестики", "40")
+
+    body = client.get("/api/stats/dynamics", params={"months": 2, "until": "2026-07"}).json()
+
+    assert body["points"][-1]["tx_count"] == 2
+
+
+def test_total_dynamics_reports_delta_to_previous_month(
+    client: TestClient, db: Session, user: User
+):
+    add_tx(db, user, "2026-06-01", "Кофе", "100")
+    add_tx(db, user, "2026-07-01", "Кофе", "150")
+
+    body = client.get("/api/stats/dynamics", params={"months": 2, "until": "2026-07"}).json()
+
+    assert Decimal(body["delta_pct"]) == Decimal("0.5")
+
+
 def test_compare_two_months(client: TestClient, db: Session, user: User):
     add_tx(db, user, "2026-06-01", "Кофе", "100")
     add_tx(db, user, "2026-07-01", "Кофе", "150")
