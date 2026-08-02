@@ -7,7 +7,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import budget, imports, stats, transactions
+from app.api import budget, funds, imports, recurring, stats, transactions
 from app.config import get_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -27,6 +27,8 @@ app.add_middleware(
 app.include_router(stats.router)
 app.include_router(transactions.router)
 app.include_router(budget.router)
+app.include_router(funds.router)
+app.include_router(recurring.router)
 app.include_router(imports.router)
 
 

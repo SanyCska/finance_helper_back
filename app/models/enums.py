@@ -13,6 +13,14 @@ class Direction(StrEnum):
 class TxSource(StrEnum):
     CSV = "csv"
     MANUAL = "manual"
+    #: начисление подписки или аренды последним днём месяца
+    RECURRING = "recurring"
+
+
+class RecurringKind(StrEnum):
+    SUBSCRIPTION = "subscription"
+    #: аренда квартиры — та же механика, но отдельное место в интерфейсе
+    RENT = "rent"
 
 
 class FxStatus(StrEnum):

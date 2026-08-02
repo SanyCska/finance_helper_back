@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import Direction, FxStatus, TxSource
+from app.models import Direction, FxStatus, RecurringKind, TxSource
 
 
 class TransactionOut(BaseModel):
@@ -133,6 +133,9 @@ class IncomeOut(BaseModel):
     amount: Decimal
     note: str | None = None
     is_default: bool = False
+    #: `saved` — задан на месяц, `carried` — перенесён с прошлого, `default` — из настроек
+    source: str = "saved"
+    from_month: str | None = None
 
 
 class IncomeIn(BaseModel):
@@ -154,12 +157,24 @@ class SettingsIn(BaseModel):
 class PlanLineIn(BaseModel):
     title: str = ""
     amount: Decimal = Field(ge=0)
+    currency: str = "USD"
+    #: категория трат, с которой строка сверяется по факту
+    category_name: str | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def _upper(cls, value: str) -> str:
+        return (value or "USD").strip().upper() or "USD"
 
 
 class PlanLineOut(BaseModel):
     id: int
     title: str
     amount: Decimal
+    currency: str
+    #: сумма в базовой валюте — по ней подводятся итоги
+    amount_base: Decimal
+    category_name: str | None
     position: int
 
 
@@ -169,10 +184,20 @@ class PlanOut(BaseModel):
     total: Decimal
     income: Decimal
     expected_saldo: Decimal
+    base_currency: str
+    #: `saved` — план сохранён, `previous` — черновик из прошлого месяца, `empty` — пусто
+    source: str = "empty"
 
 
 class PlanIn(BaseModel):
     lines: list[PlanLineIn]
+
+
+class PlanLineFactOut(PlanLineOut):
+    """Строка плана вместе с фактом по связанной категории."""
+
+    fact: Decimal | None
+    diff: Decimal | None
 
 
 class PlanVsFactOut(BaseModel):
@@ -184,8 +209,10 @@ class PlanVsFactOut(BaseModel):
     plan_saldo: Decimal
     fact_saldo: Decimal
     accuracy: Decimal | None
-    lines: list[PlanLineOut]
+    lines: list[PlanLineFactOut]
     categories: list[CategorySliceOut]
+    #: факт по категориям, которых в плане не было
+    unplanned: list[CategorySliceOut]
     has_plan: bool
 
 
@@ -214,3 +241,152 @@ class SuggestionOut(BaseModel):
 
     title: str
     amount: Decimal
+
+
+# --- средства -------------------------------------------------------------
+
+
+class FundSourceOut(BaseModel):
+    id: int
+    title: str
+    currency: str
+    position: int
+    archived: bool
+    #: последняя записанная сумма в валюте источника
+    amount_original: Decimal
+    amount_base: Decimal | None
+    updated_on: dt.date | None
+
+
+class BalancePointOut(BaseModel):
+    month: str
+    amount: Decimal
+
+
+class FundsOut(BaseModel):
+    base_currency: str
+    total_base: Decimal
+    sources: list[FundSourceOut]
+    #: итог на конец каждого месяца окна
+    history: list[BalancePointOut]
+    #: месяц, который пора сверить, если такой есть
+    pending_check: str | None
+
+
+class FundSourceIn(BaseModel):
+    title: str = Field(min_length=1)
+    currency: str = "USD"
+    #: сумма, с которой источник заводится
+    amount: Decimal = Field(default=Decimal(0), ge=0)
+
+    @field_validator("currency")
+    @classmethod
+    def _upper(cls, value: str) -> str:
+        code = (value or "").strip().upper()
+        if not code:
+            raise ValueError("Не указана валюта")
+        return code
+
+
+class FundSourcePatch(BaseModel):
+    title: str | None = None
+    currency: str | None = None
+    archived: bool | None = None
+    position: int | None = None
+
+
+class BalanceIn(BaseModel):
+    amount: Decimal = Field(ge=0)
+    date: dt.date | None = None
+    note: str | None = None
+
+
+class FundBalanceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    date: dt.date
+    amount_original: Decimal
+    currency: str
+    amount_base: Decimal | None
+    note: str | None
+
+
+class MonthCheckOut(BaseModel):
+    month: str
+    #: изменение суммы всех источников за месяц
+    real_saldo: Decimal
+    #: сальдо по введённым доходам и тратам
+    tracked_saldo: Decimal
+    #: погрешность ведения: реальное минус учтённое
+    discrepancy: Decimal
+    #: итог по источникам на начало и конец месяца; у сохранённых сверок не хранится
+    opening: Decimal | None = None
+    closing: Decimal | None = None
+    is_saved: bool
+    note: str | None = None
+
+
+class MonthCheckIn(BaseModel):
+    note: str | None = None
+
+
+# --- подписки и постоянные траты ------------------------------------------
+
+
+class RecurringOut(BaseModel):
+    id: int
+    kind: RecurringKind
+    title: str
+    amount: Decimal
+    currency: str
+    period_months: int
+    charge_day: int
+    category_name: str
+    active: bool
+    starts_on: dt.date
+    #: доля списания, попадающая в траты каждого месяца
+    monthly_amount: Decimal
+    monthly_amount_base: Decimal | None
+
+
+class RecurringListOut(BaseModel):
+    items: list[RecurringOut]
+    base_currency: str
+    monthly_total_base: Decimal
+    #: сколько начислений создано при этом запросе
+    generated: int
+
+
+class RecurringIn(BaseModel):
+    kind: RecurringKind = RecurringKind.SUBSCRIPTION
+    title: str = Field(min_length=1)
+    amount: Decimal = Field(gt=0)
+    currency: str = "USD"
+    period_months: int = Field(default=1, ge=1, le=12)
+    charge_day: int = Field(default=1, ge=1, le=31)
+    category_name: str | None = None
+    starts_on: dt.date | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def _upper(cls, value: str) -> str:
+        code = (value or "").strip().upper()
+        if not code:
+            raise ValueError("Не указана валюта")
+        return code
+
+
+class RecurringPatch(BaseModel):
+    title: str | None = None
+    amount: Decimal | None = Field(default=None, gt=0)
+    currency: str | None = None
+    period_months: int | None = Field(default=None, ge=1, le=12)
+    charge_day: int | None = Field(default=None, ge=1, le=31)
+    category_name: str | None = None
+    active: bool | None = None
+    starts_on: dt.date | None = None
+
+
+class RecurringRunOut(BaseModel):
+    generated: int

@@ -8,6 +8,7 @@ from decimal import Decimal
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -24,12 +25,13 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.enums import Direction, FxStatus, TxSource
+from app.models.enums import Direction, FxStatus, RecurringKind, TxSource
 from app.models.types import Money
 
 __all__ = [
     "Direction",
     "FxStatus",
+    "RecurringKind",
     "TxSource",
     "User",
     "Transaction",
@@ -38,6 +40,10 @@ __all__ = [
     "Plan",
     "PlanLine",
     "ImportBatch",
+    "FundSource",
+    "FundBalance",
+    "MonthCheck",
+    "RecurringExpense",
 ]
 
 
@@ -70,6 +76,8 @@ class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (
         UniqueConstraint("user_id", "zen_created_at", name="uq_tx_user_zen_created"),
+        # одно начисление на подписку и месяц: генератор идемпотентен
+        UniqueConstraint("recurring_id", "recurring_month", name="uq_tx_recurring_month"),
         Index("ix_tx_user_date", "user_id", "date"),
         Index("ix_tx_user_category", "user_id", "category_name"),
     )
@@ -95,6 +103,12 @@ class Transaction(Base):
     source: Mapped[TxSource] = mapped_column(_enum(TxSource), default=TxSource.CSV)
     zen_created_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     zen_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    #: начисление подписки: ссылка на регулярную трату и месяц, за который начислено
+    recurring_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recurring_expenses.id", ondelete="SET NULL"), nullable=True
+    )
+    recurring_month: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
 
     created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -149,10 +163,104 @@ class PlanLine(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(Text)
+    #: сумма в валюте строки; итоги подводятся в базовой валюте после пересчёта
     amount: Mapped[Decimal] = mapped_column(Money(14, 2))
+    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    #: категория трат, с которой строка сравнивается по факту; None — связи нет
+    category_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     position: Mapped[int] = mapped_column(Integer, default=0)
 
     plan: Mapped[Plan] = relationship(back_populates="lines")
+
+
+class FundSource(Base):
+    """Место, где лежат деньги: счёт, карта, наличные, брокер."""
+
+    __tablename__ = "fund_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(Text)
+    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    #: архивный источник не участвует в итоге, но история остаётся
+    archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class FundBalance(Base):
+    """Снимок суммы на источнике.
+
+    Каждое изменение пишется новой строкой, а не правкой прежней: только так
+    видна динамика. Текущий баланс — последний снимок по `(date, id)`.
+    """
+
+    __tablename__ = "fund_balances"
+    __table_args__ = (Index("ix_balance_source_date", "source_id", "date"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("fund_sources.id", ondelete="CASCADE"), index=True
+    )
+    date: Mapped[dt.date] = mapped_column(Date)
+    amount_original: Mapped[Decimal] = mapped_column(Money(18, 4))
+    currency: Mapped[str] = mapped_column(String(16))
+    amount_base: Mapped[Decimal | None] = mapped_column(Money(18, 4), nullable=True)
+    fx_rate: Mapped[Decimal | None] = mapped_column(Money(24, 10), nullable=True)
+    fx_status: Mapped[FxStatus] = mapped_column(_enum(FxStatus), default=FxStatus.PENDING)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+
+
+class MonthCheck(Base):
+    """Сверка месяца: реальное движение средств против учтённого."""
+
+    __tablename__ = "month_checks"
+    __table_args__ = (UniqueConstraint("user_id", "month", name="uq_check_user_month"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    month: Mapped[dt.date] = mapped_column(Date)
+    #: изменение суммы всех источников за месяц
+    real_saldo: Mapped[Decimal] = mapped_column(Money(14, 2))
+    #: сальдо по введённым доходам и тратам
+    tracked_saldo: Mapped[Decimal] = mapped_column(Money(14, 2))
+    #: погрешность ведения средств: реальное минус учтённое
+    discrepancy: Mapped[Decimal] = mapped_column(Money(14, 2))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class RecurringExpense(Base):
+    """Подписка или другая постоянная трата вроде аренды.
+
+    Аренда отличается от подписки только полем `kind` и местом в интерфейсе:
+    механика начисления у них одна.
+    """
+
+    __tablename__ = "recurring_expenses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[RecurringKind] = mapped_column(
+        _enum(RecurringKind), default=RecurringKind.SUBSCRIPTION
+    )
+    title: Mapped[str] = mapped_column(Text)
+    #: сумма одного списания в валюте подписки
+    amount: Mapped[Decimal] = mapped_column(Money(14, 2))
+    currency: Mapped[str] = mapped_column(String(16), default="USD")
+    #: сколько месяцев покрывает одно списание: 1 — месячная, 12 — годовая
+    period_months: Mapped[int] = mapped_column(Integer, default=1)
+    #: день списания, для справки в интерфейсе
+    charge_day: Mapped[int] = mapped_column(Integer, default=1)
+    category_name: Mapped[str] = mapped_column(Text, default="Подписки")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: первый месяц начисления; прошлые месяцы не переписываются
+    starts_on: Mapped[dt.date] = mapped_column(Date)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
 class ImportBatch(Base):

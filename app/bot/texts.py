@@ -2,7 +2,24 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from app.services.importer import ImportReport
+
+MONTHS_NOMINATIVE = [
+    "Январь",
+    "Февраль",
+    "Март",
+    "Апрель",
+    "Май",
+    "Июнь",
+    "Июль",
+    "Август",
+    "Сентябрь",
+    "Октябрь",
+    "Ноябрь",
+    "Декабрь",
+]
 
 GREETING = (
     "Привет. Пришли сюда CSV-выгрузку из Дзен-мани — разберу и запишу в базу.\n\n"
@@ -55,3 +72,43 @@ def format_import_report(report: ImportReport) -> str:
 
 def format_error(message: str) -> str:
     return f"Не получилось: {message}"
+
+
+def month_title(month: str) -> str:
+    """`'2026-07'` → `'Июль 2026'`."""
+    year, _, index = month.partition("-")
+    try:
+        return f"{MONTHS_NOMINATIVE[int(index) - 1]} {year}"
+    except (ValueError, IndexError):
+        return month
+
+
+def _money(value: Decimal) -> str:
+    """Округлённая до доллара сумма с разделителем разрядов и знаком минуса."""
+    rounded = int(round(float(value)))
+    body = f"{abs(rounded):,}".replace(",", " ")
+    return f"−${body}" if rounded < 0 else f"${body}"
+
+
+def format_month_result(
+    month: str,
+    income: Decimal,
+    outcome: Decimal,
+    saldo: Decimal,
+    needs_check: bool,
+) -> str:
+    """Итог закрывшегося месяца и просьба сверить остатки."""
+    lines = [
+        f"{month_title(month)} закрыт.",
+        "",
+        f"Доход: {_money(income)}",
+        f"Траты: {_money(outcome)}",
+        f"Сальдо: {_money(saldo)}",
+    ]
+    if needs_check:
+        lines += [
+            "",
+            "Загляни во вкладку «Средства» и обнови суммы по счетам — "
+            "покажу реальное сальдо и расхождение с учётом.",
+        ]
+    return "\n".join(lines)

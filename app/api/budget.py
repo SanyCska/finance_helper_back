@@ -17,6 +17,7 @@ from app.schemas import (
     IncomeIn,
     IncomeOut,
     PlanIn,
+    PlanLineFactOut,
     PlanLineOut,
     PlanOut,
     PlanVsFactOut,
@@ -24,7 +25,7 @@ from app.schemas import (
     SettingsOut,
     SuggestionOut,
 )
-from app.services import budget, stats
+from app.services import budget, recurring, stats
 
 router = APIRouter(prefix="/api", tags=["budget"])
 
@@ -42,18 +43,14 @@ def _month(value: str) -> dt.date:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
-def _plan_out(month: dt.date, plan, income: Decimal) -> PlanOut:
-    lines = [
-        PlanLineOut(id=line.id, title=line.title, amount=line.amount, position=line.position)
-        for line in (plan.lines if plan else [])
-    ]
-    total = budget.plan_total(plan)
-    return PlanOut(
+def _income_out(month: dt.date, state: budget.IncomeState) -> IncomeOut:
+    return IncomeOut(
         month=stats.format_month(month),
-        lines=lines,
-        total=total,
-        income=income,
-        expected_saldo=income - total,
+        amount=state.amount,
+        note=state.note,
+        is_default=state.is_default,
+        source=state.source,
+        from_month=stats.format_month(state.from_month) if state.from_month else None,
     )
 
 
@@ -64,13 +61,7 @@ def get_income(
     db: Session = Depends(get_db),
 ) -> IncomeOut:
     target = _month(month)
-    amount, note, is_default = budget.get_income(db, user, target)
-    return IncomeOut(
-        month=stats.format_month(target),
-        amount=amount,
-        note=note,
-        is_default=is_default,
-    )
+    return _income_out(target, budget.income_state(db, user, target))
 
 
 @router.put("/income/{month}", response_model=IncomeOut)
@@ -81,15 +72,8 @@ def put_income(
     db: Session = Depends(get_db),
 ) -> IncomeOut:
     target = _month(month)
-    record = budget.set_income(
-        db, user, target, payload.amount, payload.note, payload.save_as_default
-    )
-    return IncomeOut(
-        month=stats.format_month(target),
-        amount=record.amount,
-        note=record.note,
-        is_default=False,
-    )
+    budget.set_income(db, user, target, payload.amount, payload.note, payload.save_as_default)
+    return _income_out(target, budget.income_state(db, user, target))
 
 
 @router.get("/settings", response_model=SettingsOut)
@@ -120,15 +104,55 @@ def put_user_settings(
     )
 
 
+# --- планы ----------------------------------------------------------------
+
+
+def _plan_lines_out(
+    db: Session, month: dt.date, lines: list[budget.DraftLine], ids: list[int]
+) -> list[PlanLineOut]:
+    bases = budget.lines_in_base(db, lines, month)
+    return [
+        PlanLineOut(
+            id=line_id,
+            title=line.title,
+            amount=line.amount,
+            currency=line.currency,
+            amount_base=base,
+            category_name=line.category_name,
+            position=position,
+        )
+        for position, (line_id, line, base) in enumerate(zip(ids, lines, bases, strict=True))
+    ]
+
+
+def _draft_ids(db: Session, user: User, month: dt.date, source: str) -> list[int]:
+    """Идентификаторы строк: свои у сохранённого плана, прошлого месяца — у черновика."""
+    plan = budget.get_plan(db, user, month if source == "saved" else stats.shift_month(month, -1))
+    return [line.id for line in (plan.lines if plan else [])]
+
+
 @router.get("/plans/{month}", response_model=PlanOut)
 def get_plan(
     month: str,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> PlanOut:
     target = _month(month)
+    lines, source = budget.plan_draft(db, user, target)
+    out = _plan_lines_out(db, target, lines, _draft_ids(db, user, target, source))
+    total = sum((item.amount_base for item in out), ZERO)
     income, _, _ = budget.get_income(db, user, target)
-    return _plan_out(target, budget.get_plan(db, user, target), income)
+
+    return PlanOut(
+        month=stats.format_month(target),
+        lines=out,
+        total=total,
+        income=income,
+        expected_saldo=income - total,
+        base_currency=settings.base_currency,
+        source=source,
+    )
 
 
 @router.put("/plans/{month}", response_model=PlanOut)
@@ -137,16 +161,38 @@ def put_plan(
     payload: PlanIn,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> PlanOut:
     target = _month(month)
     lines = [
-        (line.title.strip(), line.amount)
+        budget.DraftLine(
+            title=line.title.strip(),
+            amount=line.amount,
+            currency=line.currency,
+            category_name=(line.category_name or "").strip() or None,
+        )
         for line in payload.lines
         if line.title.strip() or line.amount > 0
     ]
     plan = budget.save_plan(db, user, target, lines)
+
+    drafts = [
+        budget.DraftLine(item.title, item.amount, item.currency, item.category_name)
+        for item in plan.lines
+    ]
+    out = _plan_lines_out(db, target, drafts, [item.id for item in plan.lines])
+    total = sum((item.amount_base for item in out), ZERO)
     income, _, _ = budget.get_income(db, user, target)
-    return _plan_out(target, plan, income)
+
+    return PlanOut(
+        month=stats.format_month(target),
+        lines=out,
+        total=total,
+        income=income,
+        expected_saldo=income - total,
+        base_currency=settings.base_currency,
+        source="saved",
+    )
 
 
 @router.get("/plans/{month}/suggestions", response_model=list[SuggestionOut])
@@ -183,13 +229,24 @@ def plan_vs_fact(
     db: Session = Depends(get_db),
 ) -> PlanVsFactOut:
     target = _month(month)
+    # завершившийся месяц мог остаться без начислений подписок — дочисляем
+    recurring.run(db, user)
+
     plan = budget.get_plan(db, user, target)
-    plan_sum = budget.plan_total(plan)
+    plan_lines = list(plan.lines) if plan else []
+    drafts = [
+        budget.DraftLine(item.title, item.amount, item.currency, item.category_name)
+        for item in plan_lines
+    ]
+    lines_out = _plan_lines_out(db, target, drafts, [item.id for item in plan_lines])
+    plan_sum = sum((item.amount_base for item in lines_out), ZERO)
 
     transactions = stats.fetch_month(db, user.id, target)
     previous = stats.fetch_month(db, user.id, stats.shift_month(target, -1))
     income, _, _ = budget.get_income(db, user, target)
     summary = stats.month_summary(transactions, income)
+    categories = stats.category_breakdown(transactions, previous)
+    fact_by_category = {item.category: item.amount for item in categories}
 
     diff = summary.outcome_total - plan_sum
     share = (summary.outcome_total / plan_sum) if plan_sum > 0 else None
@@ -197,6 +254,21 @@ def plan_vs_fact(
     accuracy = None
     if plan_sum > 0:
         accuracy = max(ZERO, Decimal(1) - abs(diff) / plan_sum)
+
+    with_fact = []
+    linked: set[str] = set()
+    for item in lines_out:
+        fact = None
+        if item.category_name is not None:
+            linked.add(item.category_name)
+            fact = fact_by_category.get(item.category_name, ZERO)
+        with_fact.append(
+            PlanLineFactOut(
+                **item.model_dump(),
+                fact=fact,
+                diff=(fact - item.amount_base) if fact is not None else None,
+            )
+        )
 
     return PlanVsFactOut(
         month=stats.format_month(target),
@@ -207,19 +279,18 @@ def plan_vs_fact(
         plan_saldo=income - plan_sum,
         fact_saldo=summary.saldo,
         accuracy=accuracy,
-        lines=[
-            PlanLineOut(id=line.id, title=line.title, amount=line.amount, position=line.position)
-            for line in (plan.lines if plan else [])
-        ],
-        categories=[
-            CategorySliceOut(
-                category=item.category,
-                amount=item.amount,
-                share=item.share,
-                delta_pct=item.delta_pct,
-                tx_count=item.tx_count,
-            )
-            for item in stats.category_breakdown(transactions, previous)
-        ],
+        lines=with_fact,
+        categories=[_slice_out(item) for item in categories],
+        unplanned=[_slice_out(item) for item in categories if item.category not in linked],
         has_plan=plan is not None,
+    )
+
+
+def _slice_out(item: stats.CategorySlice) -> CategorySliceOut:
+    return CategorySliceOut(
+        category=item.category,
+        amount=item.amount,
+        share=item.share,
+        delta_pct=item.delta_pct,
+        tx_count=item.tx_count,
     )

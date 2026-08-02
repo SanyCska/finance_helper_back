@@ -23,7 +23,7 @@ from app.schemas import (
     MonthSummaryOut,
     TransactionOut,
 )
-from app.services import budget, stats
+from app.services import budget, recurring, stats
 
 router = APIRouter(prefix="/api", tags=["stats"])
 
@@ -71,6 +71,9 @@ def month_summary(
     settings: Settings = Depends(get_settings),
 ) -> MonthSummaryOut:
     target = _month(month)
+    # подписки начисляются лениво: планировщик мог не отработать
+    recurring.run(db, user)
+
     transactions = stats.fetch_month(db, user.id, target)
     previous = stats.fetch_month(db, user.id, stats.shift_month(target, -1))
 
