@@ -45,8 +45,9 @@ services:
   web:
     build:
       context: ../finance_helper_web
-      args:
-        NEXT_PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8000}
+    environment:
+      # Next проксирует /api/* сюда, поэтому Mini App ходит на свой же origin
+      API_PROXY_TARGET: http://api:8000
     ports:
       - "3000:3000"
     depends_on:
