@@ -97,6 +97,7 @@ jobs:
         run: |
           ssh "$SSH_USER@$SSH_HOST" 'mkdir -p /opt/finance'
           scp deploy/docker-compose.prod.yml "$SSH_USER@$SSH_HOST:/opt/finance/docker-compose.yml"
+          scp deploy/Caddyfile "$SSH_USER@$SSH_HOST:/opt/finance/Caddyfile"
           {
             printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
             printf 'BOT_TOKEN=%s\n' "$BOT_TOKEN"
@@ -111,8 +112,8 @@ jobs:
         run: |
           printf '%s' "$GHCR_PAT" | ssh "$SSH_USER@$SSH_HOST" 'docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin'
           ssh "$SSH_USER@$SSH_HOST" 'cd /opt/finance \
-            && docker compose pull postgres api bot \
-            && docker compose up -d --remove-orphans postgres api bot \
+            && docker compose pull postgres api bot caddy \
+            && docker compose up -d --remove-orphans postgres api bot caddy \
             && docker image prune -f'
 
       - name: Проверить, что API поднялся

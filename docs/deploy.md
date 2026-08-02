@@ -19,8 +19,9 @@
 | 80 | TripOS web |
 | 8000 (localhost) | TripOS api |
 | 5432 (localhost) | системный Postgres |
-| **8080** | **finance web** — единственный наружный порт стека |
-| 8001 (localhost) | finance api, только для дебага через SSH-туннель |
+| **443** | **finance caddy** — TLS, единственный наружный порт стека |
+| 8080 (localhost) | finance web, для дебага |
+| 8001 (localhost) | finance api, для дебага |
 
 Postgres финансов наружу не торчит вовсе; попасть в него:
 `ssh root@147.45.238.246 'docker compose -f /opt/finance/docker-compose.yml exec postgres psql -U finance'`.
@@ -42,7 +43,7 @@ Postgres финансов наружу не торчит вовсе; попас�
 |---|---|
 | `POSTGRES_PASSWORD` | пароль БД, сгенерировать: `openssl rand -hex 24` |
 | `BOT_TOKEN` | токен бота из BotFather |
-| `WEBAPP_URL` | https-адрес Mini App, например `https://finance.<домен>` |
+| `WEBAPP_URL` | `https://147-45-238-246.sslip.io` (см. раздел HTTPS) |
 | `ALLOWED_TELEGRAM_IDS` | `202441927` |
 | `INTERNAL_TOKEN` | секрет бот↔API, сгенерировать: `openssl rand -hex 24` |
 
@@ -62,16 +63,21 @@ Workflow валидирует, что все пять заведены и не �
 
 ## HTTPS
 
-Telegram открывает Mini App только по https, а стек отдаёт голый http на 8080.
-Варианты, любой из них — вне этого репозитория:
+Telegram открывает Mini App только по https. TLS терминирует Caddy — он часть
+стека (сервис `caddy` в compose), слушает 443 и проксирует на web. Имя
+`147-45-238-246.sslip.io` — это IP сервера, записанный через дефисы: sslip.io
+резолвит такие имена в сам IP, регистрировать ничего не нужно. Сертификат
+Let's Encrypt Caddy получает и продлевает сам через TLS-ALPN-челлендж
+(80-й порт занят TripOS, но этому челленджу хватает 443). Выдача проверена
+на сервере 2026-08-02.
 
-- **Cloudflare** (проще всего): завести поддомен, проксирование включено,
-  origin-правило на порт 8080. Cloudflare терминирует TLS, до сервера
-  доходит http. Порт 8080 входит в список проксируемых у Cloudflare.
-- **Caddy/nginx на сервере**: слушать 443, проксировать на 127.0.0.1:8080.
-  Затронет и TripOS (80-й порт занят им), поэтому осознанно.
+Отсюда значение секрета: `WEBAPP_URL=https://147-45-238-246.sslip.io` —
+и тот же адрес указывается в BotFather.
 
-`WEBAPP_URL` в секретах должен совпадать с итоговым https-адресом.
+Переезд на нормальный домен потом: A-запись на сервер, заменить имя хоста
+в `deploy/Caddyfile`, обновить секрет `WEBAPP_URL` и адрес в BotFather,
+задеплоить бэк. Если TLS отдать Cloudflare — сервис `caddy` можно убрать
+и вернуть web наружу.
 
 ## Перенос данных с ноутбука
 

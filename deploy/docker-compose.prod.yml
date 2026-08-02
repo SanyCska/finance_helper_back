@@ -4,7 +4,8 @@
 # из GitHub Secrets; вручную не редактировать.
 #
 # Порты на этом сервере: 80 занят TripOS, 5432 — системным Postgres,
-# 8000 — TripOS API. Поэтому web наружу на 8080, api для дебага на 8001.
+# 8000 — TripOS API. Наружу торчит только 443 (caddy, TLS для Mini App);
+# web на 127.0.0.1:8080 и api на 127.0.0.1:8001 — для дебага по SSH.
 name: finance
 
 services:
@@ -68,7 +69,20 @@ services:
     depends_on:
       - api
     ports:
-      - "8080:3000"
+      - "127.0.0.1:8080:3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - web
+    ports:
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # выданные сертификаты; без volume каждый рестарт шёл бы за новым
+      - caddy_data:/data
 
 volumes:
   pgdata:
+  caddy_data:
