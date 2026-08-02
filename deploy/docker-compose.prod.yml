@@ -74,8 +74,9 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
-    depends_on:
-      - web
+    # намеренно без depends_on: web — иначе деплой бэка тянул бы образ web,
+    # которого при первом запуске ещё нет в GHCR (фронт деплоится позже).
+    # Пока web не поднят, caddy отдаёт 502 — это ок.
     ports:
       - "443:443"
     volumes:
