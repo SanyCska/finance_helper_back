@@ -153,10 +153,11 @@ def run(db: Session, user: User, today: dt.date | None = None) -> int:
     return created
 
 
-def _comment(item: RecurringExpense) -> str | None:
+def _comment(item: RecurringExpense) -> str:
+    """Подпись операции: в списке трат по ней видно, какая это подписка."""
     if item.period_months <= 1:
-        return None
-    return f"{item.title}: {item.period_months}-месячная подписка, доля за месяц"
+        return item.title
+    return f"{item.title}: доля за месяц от списания раз в {item.period_months} мес."
 
 
 def monthly_total_base(db: Session, user: User, items: list[RecurringExpense]) -> Decimal:
