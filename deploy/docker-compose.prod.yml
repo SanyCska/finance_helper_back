@@ -1,0 +1,74 @@
+# Прод-стек финансового помощника на VPS. Живёт в /opt/finance/,
+# кладётся туда деплоем finance_helper_back (workflow deploy.yml).
+# Значения ${...} — из /opt/finance/.env, который генерируется деплоем
+# из GitHub Secrets; вручную не редактировать.
+#
+# Порты на этом сервере: 80 занят TripOS, 5432 — системным Postgres,
+# 8000 — TripOS API. Поэтому web наружу на 8080, api для дебага на 8001.
+name: finance
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: finance
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: finance
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finance -d finance"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    image: ghcr.io/sanycska/finance-helper-api:${API_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >-
+      sh -c "alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+psycopg://finance:${POSTGRES_PASSWORD}@postgres:5432/finance
+      BOT_TOKEN: ${BOT_TOKEN:?}
+      WEBAPP_URL: ${WEBAPP_URL:?}
+      ALLOWED_TELEGRAM_IDS: ${ALLOWED_TELEGRAM_IDS:?}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?}
+      BASE_CURRENCY: USD
+      EXCLUDED_CATEGORIES: Correction
+    # Наружу не торчит; 127.0.0.1 — для дебага через SSH-туннель
+    ports:
+      - "127.0.0.1:8001:8000"
+
+  bot:
+    image: ghcr.io/sanycska/finance-helper-api:${API_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: python -m app.bot.main
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql+psycopg://finance:${POSTGRES_PASSWORD}@postgres:5432/finance
+      BOT_TOKEN: ${BOT_TOKEN:?}
+      WEBAPP_URL: ${WEBAPP_URL:?}
+      ALLOWED_TELEGRAM_IDS: ${ALLOWED_TELEGRAM_IDS:?}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?}
+      BASE_CURRENCY: USD
+      EXCLUDED_CATEGORIES: Correction
+
+  web:
+    image: ghcr.io/sanycska/finance-helper-web:${WEB_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "8080:3000"
+
+volumes:
+  pgdata:

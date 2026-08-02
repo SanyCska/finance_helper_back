@@ -1,0 +1,129 @@
+# Деплой бэкенда: тесты → образ в GHCR → SSH на VPS.
+# Этот workflow владеет стеком /opt/finance: кладёт туда compose и .env
+# из GitHub Secrets, поднимает postgres, api и бота. Фронт деплоится
+# из finance_helper_web и обновляет только контейнер web.
+# Список секретов и runbook — docs/deploy.md.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/sanycska/finance-helper-api
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen
+      - run: uv run ruff check app tests scripts migrations
+      - run: uv run pytest -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Проверить секреты стека
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          WEBAPP_URL: ${{ secrets.WEBAPP_URL }}
+          ALLOWED_TELEGRAM_IDS: ${{ secrets.ALLOWED_TELEGRAM_IDS }}
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+        run: |
+          fail=0
+          for name in POSTGRES_PASSWORD BOT_TOKEN WEBAPP_URL ALLOWED_TELEGRAM_IDS INTERNAL_TOKEN; do
+            if [ -z "$(eval "printf '%s' \"\$$name\"")" ]; then
+              echo "::error::Секрет $name пуст или не заведён"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Настроить SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
+
+      - name: Выложить compose и .env
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          WEBAPP_URL: ${{ secrets.WEBAPP_URL }}
+          ALLOWED_TELEGRAM_IDS: ${{ secrets.ALLOWED_TELEGRAM_IDS }}
+          INTERNAL_TOKEN: ${{ secrets.INTERNAL_TOKEN }}
+        run: |
+          ssh "$SSH_USER@$SSH_HOST" 'mkdir -p /opt/finance'
+          scp deploy/docker-compose.prod.yml "$SSH_USER@$SSH_HOST:/opt/finance/docker-compose.yml"
+          {
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'BOT_TOKEN=%s\n' "$BOT_TOKEN"
+            printf 'WEBAPP_URL=%s\n' "$WEBAPP_URL"
+            printf 'ALLOWED_TELEGRAM_IDS=%s\n' "$ALLOWED_TELEGRAM_IDS"
+            printf 'INTERNAL_TOKEN=%s\n' "$INTERNAL_TOKEN"
+          } | ssh "$SSH_USER@$SSH_HOST" 'umask 077 && cat > /opt/finance/.env'
+
+      - name: Обновить стек на сервере
+        env:
+          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        run: |
+          printf '%s' "$GHCR_PAT" | ssh "$SSH_USER@$SSH_HOST" 'docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin'
+          ssh "$SSH_USER@$SSH_HOST" 'cd /opt/finance \
+            && docker compose pull postgres api bot \
+            && docker compose up -d --remove-orphans postgres api bot \
+            && docker image prune -f'
+
+      - name: Проверить, что API поднялся
+        run: |
+          for i in $(seq 1 12); do
+            if ssh "$SSH_USER@$SSH_HOST" 'curl -fsS http://127.0.0.1:8001/health' >/dev/null 2>&1; then
+              echo "API отвечает"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::API не ответил за минуту — смотри docker compose logs api"
+          ssh "$SSH_USER@$SSH_HOST" 'cd /opt/finance && docker compose logs --tail=50 api'
+          exit 1

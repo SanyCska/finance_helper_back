@@ -45,9 +45,9 @@ services:
   web:
     build:
       context: ../finance_helper_web
-    environment:
-      # Next проксирует /api/* сюда, поэтому Mini App ходит на свой же origin
-      API_PROXY_TARGET: http://api:8000
+      args:
+        # адрес вшивается в сборку: rewrites компилируются на `next build`
+        API_PROXY_TARGET: http://api:8000
     ports:
       - "3000:3000"
     depends_on:
