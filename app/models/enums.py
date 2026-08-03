@@ -21,6 +21,8 @@ class RecurringKind(StrEnum):
     SUBSCRIPTION = "subscription"
     #: аренда квартиры — та же механика, но отдельное место в интерфейсе
     RENT = "rent"
+    #: прочие постоянные траты: категорию выбирает пользователь
+    OTHER = "other"
 
 
 class FxStatus(StrEnum):

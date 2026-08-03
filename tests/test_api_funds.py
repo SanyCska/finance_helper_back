@@ -136,7 +136,12 @@ def test_saved_check_shows_up_in_history(client: TestClient):
 def test_subscription_is_created_with_monthly_share(client: TestClient):
     response = client.post(
         "/api/recurring",
-        json={"title": "Netflix", "amount": "120", "period_months": 12, "charge_day": 5},
+        json={
+            "title": "Netflix",
+            "amount": "120",
+            "period_months": 12,
+            "charge_on": "2026-03-05",
+        },
     )
 
     assert response.status_code == 201
@@ -163,7 +168,7 @@ def test_list_generates_missing_charges(client: TestClient, db: Session, user: U
     assert payload["generated"] == 1
     assert payload["monthly_total_base"] == "700.00"
     assert len(charges) == 1
-    assert charges[0].category_name == "Аренда"
+    assert charges[0].category_name == "Аренда квартиры"
 
 
 def test_deleting_subscription_removes_its_charges(client: TestClient, db: Session):

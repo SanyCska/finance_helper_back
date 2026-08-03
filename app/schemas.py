@@ -353,7 +353,10 @@ class RecurringOut(BaseModel):
     amount: Decimal
     currency: str
     period_months: int
-    charge_day: int
+    #: дата списания, как её ввёл пользователь
+    charge_on: dt.date
+    #: ближайшее списание не раньше сегодняшнего дня
+    next_charge: dt.date
     category_name: str
     active: bool
     starts_on: dt.date
@@ -376,7 +379,8 @@ class RecurringIn(BaseModel):
     amount: Decimal = Field(gt=0)
     currency: str = "USD"
     period_months: int = Field(default=1, ge=1, le=12)
-    charge_day: int = Field(default=1, ge=1, le=31)
+    #: дата списания; по умолчанию — сегодня
+    charge_on: dt.date | None = None
     category_name: str | None = None
     starts_on: dt.date | None = None
 
@@ -394,7 +398,7 @@ class RecurringPatch(BaseModel):
     amount: Decimal | None = Field(default=None, gt=0)
     currency: str | None = None
     period_months: int | None = Field(default=None, ge=1, le=12)
-    charge_day: int | None = Field(default=None, ge=1, le=31)
+    charge_on: dt.date | None = None
     category_name: str | None = None
     active: bool | None = None
     starts_on: dt.date | None = None

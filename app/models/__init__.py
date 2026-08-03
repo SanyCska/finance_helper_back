@@ -255,8 +255,9 @@ class RecurringExpense(Base):
     currency: Mapped[str] = mapped_column(String(16), default="USD")
     #: сколько месяцев покрывает одно списание: 1 — месячная, 12 — годовая
     period_months: Mapped[int] = mapped_column(Integer, default=1)
-    #: день списания, для справки в интерфейсе
-    charge_day: Mapped[int] = mapped_column(Integer, default=1)
+    #: дата списания. У месячной подписки значим только день, у годовой — ещё
+    #: и месяц: без него непонятно, в каком месяце года снимают деньги.
+    charge_on: Mapped[dt.date] = mapped_column(Date)
     category_name: Mapped[str] = mapped_column(Text, default="Подписки")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     #: первый месяц начисления; прошлые месяцы не переписываются

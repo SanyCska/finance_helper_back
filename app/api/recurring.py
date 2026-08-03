@@ -41,7 +41,8 @@ def _out(item: RecurringExpense, monthly_base: dict[int, Decimal | None]) -> Rec
         amount=item.amount,
         currency=item.currency,
         period_months=item.period_months,
-        charge_day=item.charge_day,
+        charge_on=item.charge_on,
+        next_charge=recurring.next_charge(item),
         category_name=item.category_name,
         active=item.active,
         starts_on=item.starts_on,
@@ -96,7 +97,7 @@ def create_recurring(
         amount=payload.amount,
         currency=payload.currency,
         period_months=payload.period_months,
-        charge_day=payload.charge_day,
+        charge_on=payload.charge_on or dt.date.today(),
         category_name=(payload.category_name or "").strip()
         or recurring.DEFAULT_CATEGORY[payload.kind],
         active=True,
