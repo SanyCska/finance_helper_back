@@ -137,6 +137,12 @@ def _own_manual_transaction(db: Session, user: User, transaction_id: int) -> Tra
     transaction = db.get(Transaction, transaction_id)
     if transaction is None or transaction.user_id != user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Операция не найдена")
+    if transaction.source is TxSource.RECURRING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Это начисление подписки: правьте саму подписку, "
+            "иначе следующий пересчёт вернёт прежнее значение",
+        )
     if transaction.source is not TxSource.MANUAL:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

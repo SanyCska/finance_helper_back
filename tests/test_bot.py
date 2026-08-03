@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+from decimal import Decimal
 
 from app.bot import texts
 from app.bot.handlers import is_allowed
-from app.bot.main import is_reminder_day
+from app.bot.main import is_month_result_day, is_reminder_day
 from app.services.importer import ImportReport
 
 
@@ -63,3 +64,35 @@ def test_reminder_fires_one_day_before_month_end():
     assert is_reminder_day(dt.date(2026, 7, 15)) is False
     # февраль високосного 2028 года заканчивается 29-го
     assert is_reminder_day(dt.date(2028, 2, 28)) is True
+
+
+def test_month_result_is_sent_on_the_first_day():
+    assert is_month_result_day(dt.date(2026, 8, 1)) is True
+    assert is_month_result_day(dt.date(2026, 8, 2)) is False
+
+
+def test_month_result_shows_totals_and_asks_to_check():
+    message = texts.format_month_result(
+        month="2026-07",
+        income=Decimal("3000"),
+        outcome=Decimal("2414"),
+        saldo=Decimal("586"),
+        needs_check=True,
+    )
+
+    assert message.startswith("Июль 2026 закрыт.")
+    assert "Сальдо: $586" in message
+    assert "«Средства»" in message
+
+
+def test_month_result_without_sources_does_not_ask_to_check():
+    message = texts.format_month_result(
+        month="2026-07",
+        income=Decimal("3000"),
+        outcome=Decimal("3200"),
+        saldo=Decimal("-200"),
+        needs_check=False,
+    )
+
+    assert "Сальдо: \u2212$200" in message
+    assert "Средства" not in message
