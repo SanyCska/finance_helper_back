@@ -112,9 +112,11 @@ def upgrade() -> None:
     )
 
     op.add_column('plan_lines', sa.Column('currency', sa.String(length=16), nullable=True))
-    op.add_column('plan_lines', sa.Column('category_name', sa.Text(), nullable=True))
+    op.add_column('plan_lines', sa.Column('category_names', sa.JSON(), nullable=True))
     op.execute("UPDATE plan_lines SET currency = 'USD' WHERE currency IS NULL")
+    op.execute("UPDATE plan_lines SET category_names = '[]' WHERE category_names IS NULL")
     op.alter_column('plan_lines', 'currency', nullable=False)
+    op.alter_column('plan_lines', 'category_names', nullable=False)
 
     op.add_column('transactions', sa.Column('recurring_id', sa.Integer(), nullable=True))
     op.add_column('transactions', sa.Column('recurring_month', sa.Date(), nullable=True))
@@ -139,7 +141,7 @@ def downgrade() -> None:
     op.drop_column('transactions', 'recurring_month')
     op.drop_column('transactions', 'recurring_id')
 
-    op.drop_column('plan_lines', 'category_name')
+    op.drop_column('plan_lines', 'category_names')
     op.drop_column('plan_lines', 'currency')
 
     op.drop_index(op.f('ix_recurring_expenses_user_id'), table_name='recurring_expenses')

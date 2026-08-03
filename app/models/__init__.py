@@ -166,8 +166,10 @@ class PlanLine(Base):
     #: сумма в валюте строки; итоги подводятся в базовой валюте после пересчёта
     amount: Mapped[Decimal] = mapped_column(Money(14, 2))
     currency: Mapped[str] = mapped_column(String(16), default="USD")
-    #: категория трат, с которой строка сравнивается по факту; None — связи нет
-    category_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: категории трат, по которым строка сравнивается с фактом; пусто — связи нет.
+    #: Одной строке плана вроде «еда» отвечают несколько категорий выгрузки,
+    #: поэтому это список, а не одно имя.
+    category_names: Mapped[list[str]] = mapped_column(JSON, default=list)
     position: Mapped[int] = mapped_column(Integer, default=0)
 
     plan: Mapped[Plan] = relationship(back_populates="lines")

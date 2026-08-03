@@ -218,7 +218,7 @@ def test_plan_line_keeps_currency_and_category(client: TestClient, db: Session):
                     "title": "Аренда",
                     "amount": "500",
                     "currency": "EUR",
-                    "category_name": "Аренда",
+                    "category_names": ["Аренда"],
                 }
             ]
         },
@@ -226,7 +226,7 @@ def test_plan_line_keeps_currency_and_category(client: TestClient, db: Session):
 
     assert payload["lines"][0]["currency"] == "EUR"
     assert payload["lines"][0]["amount_base"] == "550.00"
-    assert payload["lines"][0]["category_name"] == "Аренда"
+    assert payload["lines"][0]["category_names"] == ["Аренда"]
     assert payload["total"] == "550.00"
 
 
@@ -253,19 +253,25 @@ def test_vs_fact_matches_lines_to_categories(client: TestClient, db: Session, us
         "/api/plans/2026-07",
         json={
             "lines": [
-                {"title": "Продукты", "amount": "400", "category_name": "Продукты"},
-                {"title": "Кофе", "amount": "50", "category_name": "Кофе"},
+                {
+                    "title": "Продукты",
+                    "amount": "400",
+                    "category_names": ["Продукты", "Рынок"],
+                },
+                {"title": "Кофе", "amount": "50", "category_names": ["Кофе"]},
             ]
         },
     )
     add_tx(db, user, "2026-07-05", "Продукты", "450")
+    add_tx(db, user, "2026-07-04", "Рынок", "120")
     add_tx(db, user, "2026-07-06", "Такси", "80")
 
     payload = client.get("/api/plans/2026-07/vs-fact").json()
     lines = {line["title"]: line for line in payload["lines"]}
 
-    assert lines["Продукты"]["fact"] == "450.0000"
-    assert lines["Продукты"]["diff"] == "50.0000"
+    # строка связана с двумя категориями — факт складывается по обеим
+    assert lines["Продукты"]["fact"] == "570.0000"
+    assert lines["Продукты"]["diff"] == "170.0000"
     # категория была в плане, но по ней не потратили ничего
     assert lines["Кофе"]["fact"] == "0"
     assert [item["category"] for item in payload["unplanned"]] == ["Такси"]
@@ -279,3 +285,30 @@ def test_income_is_carried_to_the_next_month(client: TestClient):
     assert payload["amount"] == "3000.00"
     assert payload["source"] == "carried"
     assert payload["from_month"] == "2026-07"
+
+
+def test_plan_line_drops_blank_and_duplicate_categories(client: TestClient):
+    payload = client.put(
+        "/api/plans/2026-07",
+        json={
+            "lines": [
+                {
+                    "title": "Еда",
+                    "amount": "400",
+                    "category_names": ["Продукты", " ", "Продукты", " Рынок "],
+                }
+            ]
+        },
+    ).json()
+
+    assert payload["lines"][0]["category_names"] == ["Продукты", "Рынок"]
+
+
+def test_line_without_categories_has_no_fact(client: TestClient):
+    client.put("/api/plans/2026-07", json={"lines": [{"title": "Заначка", "amount": "400"}]})
+
+    line = client.get("/api/plans/2026-07/vs-fact").json()["lines"][0]
+
+    assert line["category_names"] == []
+    assert line["fact"] is None
+    assert line["diff"] is None

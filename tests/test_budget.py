@@ -71,14 +71,14 @@ def test_plan_draft_falls_back_to_previous_month(db: Session, user: User):
         db,
         user,
         JULY,
-        [budget.DraftLine("Аренда", Decimal("700"), "USD", "Аренда")],
+        [budget.DraftLine("Аренда", Decimal("700"), "USD", ["Аренда"])],
     )
 
     lines, source = budget.plan_draft(db, user, AUGUST)
 
     assert source == "previous"
     assert [line.title for line in lines] == ["Аренда"]
-    assert lines[0].category_name == "Аренда"
+    assert lines[0].category_names == ["Аренда"]
 
 
 def test_saved_plan_wins_over_draft(db: Session, user: User):

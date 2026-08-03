@@ -158,13 +158,24 @@ class PlanLineIn(BaseModel):
     title: str = ""
     amount: Decimal = Field(ge=0)
     currency: str = "USD"
-    #: категория трат, с которой строка сверяется по факту
-    category_name: str | None = None
+    #: категории трат, по которым строка сверяется с фактом
+    category_names: list[str] = Field(default_factory=list)
 
     @field_validator("currency")
     @classmethod
     def _upper(cls, value: str) -> str:
         return (value or "USD").strip().upper() or "USD"
+
+    @field_validator("category_names")
+    @classmethod
+    def _clean(cls, value: list[str]) -> list[str]:
+        """Пустые имена и повторы выкидываем, порядок сохраняем."""
+        seen: list[str] = []
+        for item in value:
+            name = (item or "").strip()
+            if name and name not in seen:
+                seen.append(name)
+        return seen
 
 
 class PlanLineOut(BaseModel):
@@ -174,7 +185,7 @@ class PlanLineOut(BaseModel):
     currency: str
     #: сумма в базовой валюте — по ней подводятся итоги
     amount_base: Decimal
-    category_name: str | None
+    category_names: list[str]
     position: int
 
 
@@ -194,8 +205,9 @@ class PlanIn(BaseModel):
 
 
 class PlanLineFactOut(PlanLineOut):
-    """Строка плана вместе с фактом по связанной категории."""
+    """Строка плана вместе с фактом по связанным категориям."""
 
+    #: сумма трат по всем связанным категориям; `None` — категории не выбраны
     fact: Decimal | None
     diff: Decimal | None
 

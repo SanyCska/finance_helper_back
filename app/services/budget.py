@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -108,7 +108,8 @@ class DraftLine:
     title: str
     amount: Decimal
     currency: str = "USD"
-    category_name: str | None = None
+    #: категории трат, по которым строка сверяется с фактом
+    category_names: list[str] = field(default_factory=list)
 
 
 def save_plan(db: Session, user: User, month: dt.date, lines: list[DraftLine]) -> Plan:
@@ -126,7 +127,7 @@ def save_plan(db: Session, user: User, month: dt.date, lines: list[DraftLine]) -
                 title=line.title,
                 amount=line.amount,
                 currency=(line.currency or "USD").upper(),
-                category_name=line.category_name or None,
+                category_names=list(line.category_names),
                 position=position,
             )
         )
@@ -145,14 +146,14 @@ def plan_draft(db: Session, user: User, month: dt.date) -> tuple[list[DraftLine]
     plan = get_plan(db, user, month)
     if plan is not None and plan.lines:
         return [
-            DraftLine(line.title, line.amount, line.currency, line.category_name)
+            DraftLine(line.title, line.amount, line.currency, list(line.category_names or []))
             for line in plan.lines
         ], "saved"
 
     previous = get_plan(db, user, stats.shift_month(month, -1))
     if previous is not None and previous.lines:
         return [
-            DraftLine(line.title, line.amount, line.currency, line.category_name)
+            DraftLine(line.title, line.amount, line.currency, list(line.category_names or []))
             for line in previous.lines
         ], "previous"
 
