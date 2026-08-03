@@ -122,9 +122,40 @@ def test_pending_check_appears_only_with_sources(db: Session, user: User):
 
     assert funds.pending_check_month(db, user, today) is None
 
-    add_source(db, user, "Наличные", "USD")
+    source = add_source(db, user, "Наличные", "USD")
+    funds.set_balance(db, user, source, Decimal("100"), dt.date(2026, 6, 30))
 
     assert funds.pending_check_month(db, user, today) == dt.date(2026, 7, 1)
+
+
+def test_first_month_of_tracking_is_not_offered_for_check(db: Session, user: User):
+    today = dt.date(2026, 8, 3)
+    source = add_source(db, user, "Наличные", "USD")
+    # первый снимок появился внутри июля — остатка на его начало нет
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+
+    assert funds.pending_check_month(db, user, today) is None
+
+
+def test_first_month_check_is_not_comparable(db: Session, user: User, source: FundSource):
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+
+    result = funds.month_check(db, user, dt.date(2026, 7, 1))
+
+    assert result.comparable is False
+    # весь остаток выглядел бы незаписанным доходом — такое не показываем
+    assert result.discrepancy == Decimal(0)
+    assert result.real_saldo == Decimal(0)
+
+
+def test_second_month_becomes_comparable(db: Session, user: User, source: FundSource):
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+    funds.set_balance(db, user, source, Decimal("14500"), dt.date(2026, 8, 31))
+
+    result = funds.month_check(db, user, dt.date(2026, 8, 1))
+
+    assert result.comparable is True
+    assert result.real_saldo == Decimal("500.00")
 
 
 def test_pending_check_clears_after_save(db: Session, user: User, source: FundSource):

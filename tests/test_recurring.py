@@ -32,7 +32,7 @@ def add_item(
         amount=Decimal(amount),
         currency=currency,
         period_months=period_months,
-        charge_day=1,
+        charge_on=starts_on,
         category_name=recurring.DEFAULT_CATEGORY[kind],
         active=active,
         starts_on=starts_on,
@@ -121,7 +121,7 @@ def test_rent_uses_its_own_category(db: Session, user: User):
     recurring.run(db, user, TODAY)
 
     charge = charges(db, user)[0]
-    assert charge.category_name == "Аренда"
+    assert charge.category_name == "Аренда квартиры"
     assert charge.payee == "Квартира"
     assert charge.direction.value == "outcome"
 
@@ -150,3 +150,47 @@ def test_monthly_total_counts_active_only(db: Session, user: User):
     items = recurring.list_items(db, user)
 
     assert recurring.monthly_total_base(db, user, items) == Decimal("10.00")
+
+
+def test_other_kind_leaves_category_empty(db: Session, user: User):
+    item = add_item(db, user, title="Страховка", period_months=1, kind=RecurringKind.OTHER)
+    item.category_name = ""
+    db.commit()
+
+    recurring.run(db, user, TODAY)
+
+    # пустая категория в интерфейсе показывается как «Без категории»
+    assert charges(db, user)[0].category_name == ""
+
+
+def test_next_charge_stays_in_future(db: Session, user: User):
+    item = add_item(db, user, period_months=1, starts_on=dt.date(2026, 6, 15))
+    item.charge_on = dt.date(2026, 6, 15)
+    db.commit()
+
+    assert recurring.next_charge(item, TODAY) == dt.date(2026, 8, 15)
+
+
+def test_next_charge_of_yearly_keeps_its_month(db: Session, user: User):
+    item = add_item(db, user, period_months=12)
+    item.charge_on = dt.date(2026, 3, 5)
+    db.commit()
+
+    assert recurring.next_charge(item, TODAY) == dt.date(2027, 3, 5)
+
+
+def test_next_charge_today_is_not_moved(db: Session, user: User):
+    item = add_item(db, user, period_months=1)
+    item.charge_on = TODAY
+    db.commit()
+
+    assert recurring.next_charge(item, TODAY) == TODAY
+
+
+def test_charge_day_is_clamped_to_short_month(db: Session, user: User):
+    item = add_item(db, user, period_months=1)
+    item.charge_on = dt.date(2026, 1, 31)
+    db.commit()
+
+    # 31 января плюс месяц — конец февраля, а не 3 марта
+    assert recurring.next_charge(item, dt.date(2026, 2, 1)) == dt.date(2026, 2, 28)

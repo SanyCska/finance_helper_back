@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 from app.auth import current_user
 from app.config import Settings, get_settings
 from app.db import get_db
-from app.models import FundSource, User
+from app.models import FundBalance, FundSource, User
 from app.schemas import (
     BalanceIn,
+    BalancePatch,
     BalancePointOut,
     FundBalanceOut,
     FundSourceIn,
@@ -66,8 +67,16 @@ def _check_out(result: funds.MonthCheckResult) -> MonthCheckOut:
         opening=result.opening,
         closing=result.closing,
         is_saved=result.saved is not None,
+        comparable=result.comparable,
         note=result.saved.note if result.saved else None,
     )
+
+
+def _own_balance(db: Session, user: User, source_id: int, balance_id: int) -> FundBalance:
+    balance = db.get(FundBalance, balance_id)
+    if balance is None or balance.user_id != user.id or balance.source_id != source_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Запись баланса не найдена")
+    return balance
 
 
 @router.get("", response_model=FundsOut)
@@ -168,6 +177,41 @@ def put_balance(
     return _source_out(funds.SourceState(source=source, balance=balance))
 
 
+@router.patch("/{source_id}/balance/{balance_id}", response_model=FundBalanceOut)
+def patch_balance(
+    source_id: int,
+    balance_id: int,
+    payload: BalancePatch,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FundBalanceOut:
+    """Правка записи баланса: опечатался в сумме или в дате."""
+    balance = _own_balance(db, user, source_id, balance_id)
+    if payload.date is not None and payload.date > dt.date.today():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Дата в будущем")
+
+    fields = payload.model_dump(exclude_unset=True)
+    updated = funds.update_balance(
+        db,
+        balance,
+        amount=payload.amount,
+        day=payload.date,
+        note=payload.note,
+        note_set="note" in fields,
+    )
+    return FundBalanceOut.model_validate(updated)
+
+
+@router.delete("/{source_id}/balance/{balance_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_balance(
+    source_id: int,
+    balance_id: int,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    funds.delete_balance(db, _own_balance(db, user, source_id, balance_id))
+
+
 @router.get("/{source_id}/history", response_model=list[FundBalanceOut])
 def source_history(
     source_id: int,
@@ -213,5 +257,11 @@ def post_check(
     db: Session = Depends(get_db),
 ) -> MonthCheckOut:
     target = _month(month)
+    if not funds.has_opening(db, user, target):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Это первый месяц учёта средств: остатка на его начало нет, "
+            "сверять не с чем. Сверка станет возможна со следующего месяца.",
+        )
     funds.save_check(db, user, target, payload.note)
     return _check_out(funds.month_check(db, user, target))

@@ -118,7 +118,7 @@ def _plan_lines_out(
             amount=line.amount,
             currency=line.currency,
             amount_base=base,
-            category_name=line.category_name,
+            category_names=list(line.category_names),
             position=position,
         )
         for position, (line_id, line, base) in enumerate(zip(ids, lines, bases, strict=True))
@@ -169,7 +169,7 @@ def put_plan(
             title=line.title.strip(),
             amount=line.amount,
             currency=line.currency,
-            category_name=(line.category_name or "").strip() or None,
+            category_names=line.category_names,
         )
         for line in payload.lines
         if line.title.strip() or line.amount > 0
@@ -177,7 +177,7 @@ def put_plan(
     plan = budget.save_plan(db, user, target, lines)
 
     drafts = [
-        budget.DraftLine(item.title, item.amount, item.currency, item.category_name)
+        budget.DraftLine(item.title, item.amount, item.currency, list(item.category_names or []))
         for item in plan.lines
     ]
     out = _plan_lines_out(db, target, drafts, [item.id for item in plan.lines])
@@ -235,7 +235,7 @@ def plan_vs_fact(
     plan = budget.get_plan(db, user, target)
     plan_lines = list(plan.lines) if plan else []
     drafts = [
-        budget.DraftLine(item.title, item.amount, item.currency, item.category_name)
+        budget.DraftLine(item.title, item.amount, item.currency, list(item.category_names or []))
         for item in plan_lines
     ]
     lines_out = _plan_lines_out(db, target, drafts, [item.id for item in plan_lines])
@@ -259,9 +259,12 @@ def plan_vs_fact(
     linked: set[str] = set()
     for item in lines_out:
         fact = None
-        if item.category_name is not None:
-            linked.add(item.category_name)
-            fact = fact_by_category.get(item.category_name, ZERO)
+        if item.category_names:
+            linked.update(item.category_names)
+            # строка вроде «еда» покрывает сразу несколько категорий выгрузки
+            fact = sum(
+                (fact_by_category.get(name, ZERO) for name in item.category_names), ZERO
+            )
         with_fact.append(
             PlanLineFactOut(
                 **item.model_dump(),

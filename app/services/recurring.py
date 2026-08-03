@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from decimal import Decimal
 
@@ -38,16 +39,20 @@ _CENTS = Decimal("0.01")
 #: сколько месяцев назад генератор готов достроить за один прогон
 MAX_BACKFILL_MONTHS = 36
 
-#: категории по умолчанию — чтобы начисления сразу попадали в разбивку
+#: категории по умолчанию — чтобы начисления сразу попадали в разбивку.
+#: У прочих трат её нет: пустая категория показывается как «Без категории»,
+#: а осмысленную выбирает сам пользователь.
 DEFAULT_CATEGORY = {
     RecurringKind.SUBSCRIPTION: "Подписки",
-    RecurringKind.RENT: "Аренда",
+    RecurringKind.RENT: "Аренда квартиры",
+    RecurringKind.OTHER: "",
 }
 
 #: подпись счёта у начислений: отличает их в списке операций и в фильтрах
 ACCOUNT_LABEL = {
     RecurringKind.SUBSCRIPTION: "Подписки",
-    RecurringKind.RENT: "Аренда",
+    RecurringKind.RENT: "Аренда квартиры",
+    RecurringKind.OTHER: "Постоянные траты",
 }
 
 
@@ -55,6 +60,32 @@ def monthly_amount(item: RecurringExpense) -> Decimal:
     """Месячная доля списания в валюте подписки."""
     period = max(1, item.period_months)
     return (Decimal(item.amount) / period).quantize(_CENTS)
+
+
+def shift_months(day: dt.date, months: int) -> dt.date:
+    """Сдвиг даты на месяцы с подрезкой дня по длине месяца.
+
+    31 января плюс месяц — 28 февраля, а не 3 марта: списание не должно
+    переползать в следующий месяц.
+    """
+    index = day.year * 12 + (day.month - 1) + months
+    year, month = index // 12, index % 12 + 1
+    return dt.date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
+
+
+def next_charge(item: RecurringExpense, today: dt.date | None = None) -> dt.date:
+    """Ближайшее списание не раньше сегодняшнего дня."""
+    today = today or dt.date.today()
+    period = max(1, item.period_months)
+    current = item.charge_on
+    if current >= today:
+        return current
+    # доводим до сегодняшнего дня целыми периодами, не перебирая по одному
+    months = (today.year * 12 + today.month) - (current.year * 12 + current.month)
+    current = shift_months(current, max(0, months // period) * period)
+    while current < today:
+        current = shift_months(current, period)
+    return current
 
 
 def last_closed_month(today: dt.date | None = None) -> dt.date:

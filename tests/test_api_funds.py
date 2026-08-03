@@ -120,6 +120,7 @@ def test_month_check_reports_discrepancy(client: TestClient, db: Session, user: 
 
 def test_saved_check_shows_up_in_history(client: TestClient):
     source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "400", "date": "2026-06-30"})
     client.put(f"/api/funds/{source_id}/balance", json={"amount": "500", "date": "2026-07-31"})
 
     saved = client.post("/api/funds/checks/2026-07", json={"note": "сошлось"}).json()
@@ -130,13 +131,79 @@ def test_saved_check_shows_up_in_history(client: TestClient):
     assert history[0]["note"] == "сошлось"
 
 
+def test_first_month_check_cannot_be_saved(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "14000", "date": "2026-07-20"})
+
+    payload = client.get("/api/funds/checks/2026-07").json()
+    saved = client.post("/api/funds/checks/2026-07", json={})
+
+    assert payload["comparable"] is False
+    assert saved.status_code == 409
+    assert "первый месяц" in saved.json()["detail"].lower()
+
+
+def test_balance_can_be_edited(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "100", "date": "2026-07-31"})
+    balance_id = client.get(f"/api/funds/{source_id}/history").json()[0]["id"]
+
+    fixed = client.patch(
+        f"/api/funds/{source_id}/balance/{balance_id}",
+        json={"amount": "250", "note": "опечатка"},
+    ).json()
+
+    assert fixed["amount_original"] == "250.0000"
+    assert fixed["note"] == "опечатка"
+    # правка снимка, а не новая запись: история не растёт
+    assert len(client.get(f"/api/funds/{source_id}/history").json()) == 1
+    assert client.get("/api/funds").json()["total_base"] == "250.00"
+
+
+def test_balance_can_be_deleted(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "100", "date": "2026-06-30"})
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "999", "date": "2026-07-31"})
+    wrong = client.get(f"/api/funds/{source_id}/history").json()[0]["id"]
+
+    client.delete(f"/api/funds/{source_id}/balance/{wrong}")
+
+    history = client.get(f"/api/funds/{source_id}/history").json()
+    assert [item["amount_original"] for item in history] == ["100.0000"]
+    # итог вернулся к предыдущему снимку
+    assert client.get("/api/funds").json()["total_base"] == "100.00"
+
+
+def test_balance_of_foreign_source_is_not_found(client: TestClient):
+    a = client.post("/api/funds", json={"title": "Сербия", "amount": "10"}).json()["id"]
+    b = client.post("/api/funds", json={"title": "Наличные", "amount": "20"}).json()["id"]
+    balance_id = client.get(f"/api/funds/{a}/history").json()[0]["id"]
+
+    # запись принадлежит другому источнику — правка через чужой id запрещена
+    assert client.delete(f"/api/funds/{b}/balance/{balance_id}").status_code == 404
+
+
+def test_source_can_be_renamed(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия", "amount": "10"}).json()["id"]
+
+    renamed = client.patch(f"/api/funds/{source_id}", json={"title": "  Сербия, карта  "}).json()
+
+    assert renamed["title"] == "Сербия, карта"
+    assert renamed["amount_original"] == "10.0000"
+
+
 # --- подписки -------------------------------------------------------------
 
 
 def test_subscription_is_created_with_monthly_share(client: TestClient):
     response = client.post(
         "/api/recurring",
-        json={"title": "Netflix", "amount": "120", "period_months": 12, "charge_day": 5},
+        json={
+            "title": "Netflix",
+            "amount": "120",
+            "period_months": 12,
+            "charge_on": "2026-03-05",
+        },
     )
 
     assert response.status_code == 201
@@ -163,7 +230,7 @@ def test_list_generates_missing_charges(client: TestClient, db: Session, user: U
     assert payload["generated"] == 1
     assert payload["monthly_total_base"] == "700.00"
     assert len(charges) == 1
-    assert charges[0].category_name == "Аренда"
+    assert charges[0].category_name == "Аренда квартиры"
 
 
 def test_deleting_subscription_removes_its_charges(client: TestClient, db: Session):
@@ -218,7 +285,7 @@ def test_plan_line_keeps_currency_and_category(client: TestClient, db: Session):
                     "title": "Аренда",
                     "amount": "500",
                     "currency": "EUR",
-                    "category_name": "Аренда",
+                    "category_names": ["Аренда"],
                 }
             ]
         },
@@ -226,7 +293,7 @@ def test_plan_line_keeps_currency_and_category(client: TestClient, db: Session):
 
     assert payload["lines"][0]["currency"] == "EUR"
     assert payload["lines"][0]["amount_base"] == "550.00"
-    assert payload["lines"][0]["category_name"] == "Аренда"
+    assert payload["lines"][0]["category_names"] == ["Аренда"]
     assert payload["total"] == "550.00"
 
 
@@ -253,19 +320,25 @@ def test_vs_fact_matches_lines_to_categories(client: TestClient, db: Session, us
         "/api/plans/2026-07",
         json={
             "lines": [
-                {"title": "Продукты", "amount": "400", "category_name": "Продукты"},
-                {"title": "Кофе", "amount": "50", "category_name": "Кофе"},
+                {
+                    "title": "Продукты",
+                    "amount": "400",
+                    "category_names": ["Продукты", "Рынок"],
+                },
+                {"title": "Кофе", "amount": "50", "category_names": ["Кофе"]},
             ]
         },
     )
     add_tx(db, user, "2026-07-05", "Продукты", "450")
+    add_tx(db, user, "2026-07-04", "Рынок", "120")
     add_tx(db, user, "2026-07-06", "Такси", "80")
 
     payload = client.get("/api/plans/2026-07/vs-fact").json()
     lines = {line["title"]: line for line in payload["lines"]}
 
-    assert lines["Продукты"]["fact"] == "450.0000"
-    assert lines["Продукты"]["diff"] == "50.0000"
+    # строка связана с двумя категориями — факт складывается по обеим
+    assert lines["Продукты"]["fact"] == "570.0000"
+    assert lines["Продукты"]["diff"] == "170.0000"
     # категория была в плане, но по ней не потратили ничего
     assert lines["Кофе"]["fact"] == "0"
     assert [item["category"] for item in payload["unplanned"]] == ["Такси"]
@@ -279,3 +352,30 @@ def test_income_is_carried_to_the_next_month(client: TestClient):
     assert payload["amount"] == "3000.00"
     assert payload["source"] == "carried"
     assert payload["from_month"] == "2026-07"
+
+
+def test_plan_line_drops_blank_and_duplicate_categories(client: TestClient):
+    payload = client.put(
+        "/api/plans/2026-07",
+        json={
+            "lines": [
+                {
+                    "title": "Еда",
+                    "amount": "400",
+                    "category_names": ["Продукты", " ", "Продукты", " Рынок "],
+                }
+            ]
+        },
+    ).json()
+
+    assert payload["lines"][0]["category_names"] == ["Продукты", "Рынок"]
+
+
+def test_line_without_categories_has_no_fact(client: TestClient):
+    client.put("/api/plans/2026-07", json={"lines": [{"title": "Заначка", "amount": "400"}]})
+
+    line = client.get("/api/plans/2026-07/vs-fact").json()["lines"][0]
+
+    assert line["category_names"] == []
+    assert line["fact"] is None
+    assert line["diff"] is None

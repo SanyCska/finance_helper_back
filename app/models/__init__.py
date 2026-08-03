@@ -166,8 +166,10 @@ class PlanLine(Base):
     #: сумма в валюте строки; итоги подводятся в базовой валюте после пересчёта
     amount: Mapped[Decimal] = mapped_column(Money(14, 2))
     currency: Mapped[str] = mapped_column(String(16), default="USD")
-    #: категория трат, с которой строка сравнивается по факту; None — связи нет
-    category_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: категории трат, по которым строка сравнивается с фактом; пусто — связи нет.
+    #: Одной строке плана вроде «еда» отвечают несколько категорий выгрузки,
+    #: поэтому это список, а не одно имя.
+    category_names: Mapped[list[str]] = mapped_column(JSON, default=list)
     position: Mapped[int] = mapped_column(Integer, default=0)
 
     plan: Mapped[Plan] = relationship(back_populates="lines")
@@ -253,8 +255,9 @@ class RecurringExpense(Base):
     currency: Mapped[str] = mapped_column(String(16), default="USD")
     #: сколько месяцев покрывает одно списание: 1 — месячная, 12 — годовая
     period_months: Mapped[int] = mapped_column(Integer, default=1)
-    #: день списания, для справки в интерфейсе
-    charge_day: Mapped[int] = mapped_column(Integer, default=1)
+    #: дата списания. У месячной подписки значим только день, у годовой — ещё
+    #: и месяц: без него непонятно, в каком месяце года снимают деньги.
+    charge_on: Mapped[dt.date] = mapped_column(Date)
     category_name: Mapped[str] = mapped_column(Text, default="Подписки")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     #: первый месяц начисления; прошлые месяцы не переписываются
