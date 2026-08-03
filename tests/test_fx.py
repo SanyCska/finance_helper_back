@@ -146,6 +146,27 @@ def test_ensure_rates_fetches_each_currency_once_for_whole_range(db: Session):
     assert end >= D(2026, 7, 19)
 
 
+def test_series_day_outside_window_does_not_duplicate_existing_rate(db: Session):
+    # Yahoo из-за таймзоны биржи может отдать свечу на день раньше запрошенного
+    # окна; если этот день уже лежит в базе, вставка не должна падать на
+    # уникальном ключе (date, currency)
+    day = D(2026, 8, 3)
+    start = day - dt.timedelta(days=7 + 4)  # fx_lookback_days + CARRY_FORWARD_DAYS
+    outside = start - dt.timedelta(days=1)
+    db.add(FxRate(date=outside, currency="RUB", rate_to_base=Decimal("0.0128"), source="yahoo"))
+    db.flush()
+
+    class LeakyProvider:
+        def fetch_series(self, currency, s, e):
+            return {outside: Decimal("0.0129"), day: Decimal("0.0130")}
+
+    fx = service(db, LeakyProvider())
+    fx.ensure_rates([(day, "RUB")])
+
+    dates = [row.date for row in db.query(FxRate).filter(FxRate.currency == "RUB").all()]
+    assert sorted(dates) == [outside, day]
+
+
 def test_cached_rates_are_not_refetched(db: Session):
     provider = FakeProvider({"RSD": {D(2026, 7, 1): "0.0095"}})
     fx = service(db, provider)

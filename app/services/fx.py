@@ -219,13 +219,15 @@ class FxService:
             logger.warning("Курсов для %s не нашлось ни в одном источнике", currency)
             return
 
+        # дедупликация по фактическим датам ряда, а не по окну запроса:
+        # Yahoo из-за таймзоны биржи может вернуть свечу за пределами окна,
+        # и вставка такого дня падала бы на уникальном ключе
         existing = {
             day
             for (day,) in self.db.execute(
                 select(FxRate.date).where(
                     FxRate.currency == currency,
-                    FxRate.date >= start,
-                    FxRate.date <= end,
+                    FxRate.date.in_(series.keys()),
                 )
             )
         }
