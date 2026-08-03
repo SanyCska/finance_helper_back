@@ -180,3 +180,101 @@ def test_backfill_fills_pending_transactions(db: Session, user):
     assert filled == 1
     assert tx.amount_base == Decimal("9.5000")
     assert tx.fx_status is FxStatus.OK
+
+
+class FakeFallback:
+    """Запасной источник: отдаёт курсы на конкретные даты."""
+
+    def __init__(self, rates: dict[str, str], *, fail: bool = False):
+        self.rates = rates
+        self.fail = fail
+        self.calls: list[tuple[str, list[dt.date]]] = []
+
+    def fetch_days(self, currency, days):
+        self.calls.append((currency, list(days)))
+        if self.fail:
+            raise ConnectionError("CDN недоступен")
+        value = self.rates.get(currency)
+        return {day: Decimal(value) for day in days} if value else {}
+
+
+def test_fallback_saves_the_day_when_primary_is_silent(db: Session):
+    # Yahoo молчит по рублю — именно так это выглядело на сервере
+    primary = FakeProvider({}, fail=True)
+    fallback = FakeFallback({"RUB": "0.0126"})
+    fx = FxService(db, provider=primary, fallback=fallback)
+
+    fx.ensure_rates([(D(2026, 8, 3), "RUB")])
+    amount, rate, status = fx.convert(Decimal("27330"), "RUB", D(2026, 8, 3))
+
+    assert fallback.calls == [("RUB", [D(2026, 8, 3)])]
+    assert rate == Decimal("0.0126")
+    assert amount == Decimal("344.3580")
+    assert status is FxStatus.OK
+
+
+def test_fallback_is_not_asked_when_primary_answered(db: Session):
+    primary = FakeProvider({"RUB": {D(2026, 8, 3): "0.0125"}})
+    fallback = FakeFallback({"RUB": "0.0126"})
+    fx = FxService(db, provider=primary, fallback=fallback)
+
+    fx.ensure_rates([(D(2026, 8, 3), "RUB")])
+
+    assert fallback.calls == []
+
+
+def test_both_sources_down_leave_amount_pending(db: Session):
+    fx = FxService(
+        db, provider=FakeProvider({}, fail=True), fallback=FakeFallback({}, fail=True)
+    )
+
+    fx.ensure_rates([(D(2026, 8, 3), "RUB")])
+    amount, _, status = fx.convert(Decimal("27330"), "RUB", D(2026, 8, 3))
+
+    assert amount is None
+    assert status is FxStatus.PENDING
+
+
+def test_fallback_rates_are_marked_by_their_source(db: Session):
+    fx = FxService(
+        db, provider=FakeProvider({}, fail=True), fallback=FakeFallback({"RUB": "0.0126"})
+    )
+
+    fx.ensure_rates([(D(2026, 8, 3), "RUB")])
+
+    saved = db.query(FxRate).filter(FxRate.currency == "RUB").one()
+    assert saved.source == "currency-api"
+
+
+def test_backfill_fills_fund_balances_too(db: Session):
+    from app.models import FundBalance, FundSource, User
+
+    user = User(telegram_id=7, base_currency="USD")
+    db.add(user)
+    db.commit()
+    source = FundSource(user_id=user.id, title="Рубли", currency="RUB", position=0)
+    db.add(source)
+    db.commit()
+    # запись, созданная когда курса не было: сумма есть, долларов нет
+    db.add(
+        FundBalance(
+            user_id=user.id,
+            source_id=source.id,
+            date=D(2026, 8, 3),
+            amount_original=Decimal("27330"),
+            currency="RUB",
+            amount_base=None,
+            fx_status=FxStatus.PENDING,
+        )
+    )
+    db.commit()
+
+    fx = FxService(
+        db, provider=FakeProvider({}, fail=True), fallback=FakeFallback({"RUB": "0.0126"})
+    )
+    filled = fx.backfill(user_id=user.id)
+
+    restored = db.query(FundBalance).one()
+    assert filled == 1
+    assert restored.amount_base == Decimal("344.3580")
+    assert restored.fx_status is FxStatus.OK

@@ -105,6 +105,9 @@ def overview(
             if (month := funds.pending_check_month(db, user))
             else None
         ),
+        pending_fx=sum(
+            1 for state in states if state.balance is not None and state.amount_base is None
+        ),
     )
 
 

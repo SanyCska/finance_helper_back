@@ -283,6 +283,8 @@ class FundsOut(BaseModel):
     history: list[BalancePointOut]
     #: месяц, который пора сверить, если такой есть
     pending_check: str | None
+    #: источники, для которых не нашлось курса: их сумма в долларах неизвестна
+    pending_fx: int = 0
 
 
 class FundSourceIn(BaseModel):

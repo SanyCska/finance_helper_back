@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import current_user
 from app.db import get_db
-from app.models import Transaction, User
+from app.models import FundBalance, Transaction, User
 from app.schemas import BackfillOut, ImportReportOut
 from app.services.fx import FxService
 from app.services.importer import import_csv
@@ -46,13 +46,15 @@ def backfill_rates(
     db: Session = Depends(get_db),
 ) -> BackfillOut:
     filled = FxService(db).backfill(user_id=user.id)
-    pending_left = (
-        db.scalar(
-            select(func.count(Transaction.id)).where(
-                Transaction.user_id == user.id,
-                Transaction.amount_base.is_(None),
+    pending_left = 0
+    for model in (Transaction, FundBalance):
+        pending_left += (
+            db.scalar(
+                select(func.count(model.id)).where(
+                    model.user_id == user.id,
+                    model.amount_base.is_(None),
+                )
             )
+            or 0
         )
-        or 0
-    )
     return BackfillOut(filled=filled, pending_left=pending_left)
