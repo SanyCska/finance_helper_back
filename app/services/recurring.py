@@ -88,6 +88,21 @@ def next_charge(item: RecurringExpense, today: dt.date | None = None) -> dt.date
     return current
 
 
+def charges_in_month(item: RecurringExpense, month: dt.date) -> bool:
+    """Спишут ли по этой подписке деньги в этом месяце.
+
+    Считается по расстоянию в месяцах от даты списания: годовая подписка
+    попадает раз в двенадцать месяцев, месячная — каждый.
+    """
+    if not item.active:
+        return False
+    period = max(1, item.period_months)
+    distance = (month.year * 12 + month.month) - (
+        item.charge_on.year * 12 + item.charge_on.month
+    )
+    return distance >= 0 and distance % period == 0
+
+
 def last_closed_month(today: dt.date | None = None) -> dt.date:
     """Последний завершившийся месяц: текущий начисляем только после его конца."""
     today = today or dt.date.today()

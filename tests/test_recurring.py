@@ -194,3 +194,36 @@ def test_charge_day_is_clamped_to_short_month(db: Session, user: User):
 
     # 31 января плюс месяц — конец февраля, а не 3 марта
     assert recurring.next_charge(item, dt.date(2026, 2, 1)) == dt.date(2026, 2, 28)
+
+
+def test_monthly_charge_falls_in_every_month(db: Session, user: User):
+    item = add_item(db, user, period_months=1)
+    item.charge_on = dt.date(2026, 5, 5)
+    db.commit()
+
+    assert recurring.charges_in_month(item, dt.date(2026, 8, 1)) is True
+
+
+def test_yearly_charge_falls_only_in_its_month(db: Session, user: User):
+    item = add_item(db, user, period_months=12)
+    item.charge_on = dt.date(2026, 3, 5)
+    db.commit()
+
+    assert recurring.charges_in_month(item, dt.date(2026, 8, 1)) is False
+    assert recurring.charges_in_month(item, dt.date(2027, 3, 1)) is True
+
+
+def test_charge_before_its_start_is_not_counted(db: Session, user: User):
+    item = add_item(db, user, period_months=1)
+    item.charge_on = dt.date(2026, 10, 5)
+    db.commit()
+
+    assert recurring.charges_in_month(item, dt.date(2026, 8, 1)) is False
+
+
+def test_paused_subscription_has_no_charges(db: Session, user: User):
+    item = add_item(db, user, period_months=1, active=False)
+    item.charge_on = dt.date(2026, 5, 5)
+    db.commit()
+
+    assert recurring.charges_in_month(item, dt.date(2026, 8, 1)) is False

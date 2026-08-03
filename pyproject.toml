@@ -15,6 +15,9 @@ dependencies = [
     "python-multipart>=0.0.20",
     "aiogram>=3.15",
     "apscheduler>=3.11",
+    # база часовых поясов: в slim-образе её может не быть, а zoneinfo
+    # без неё не найдёт Europe/Belgrade
+    "tzdata>=2024.2",
 ]
 
 [dependency-groups]

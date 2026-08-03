@@ -90,6 +90,52 @@ def _money(value: Decimal) -> str:
     return f"−${body}" if rounded < 0 else f"${body}"
 
 
+def _amount(value: Decimal, currency: str) -> str:
+    """Сумма в своей валюте: «650 EUR», «15.99 USD»."""
+    quantized = Decimal(value).normalize()
+    text = format(quantized, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    whole, _, fraction = text.partition(".")
+    grouped = f"{int(whole):,}".replace(",", " ")
+    return f"{grouped}{'.' + fraction if fraction else ''} {currency}"
+
+
+def format_funds_reminder(
+    month: str,
+    sources: list[tuple[str, Decimal, str, str | None]],
+    charges: list[tuple[str, Decimal, str]],
+) -> str:
+    """Напоминание свести средства в последний день месяца.
+
+    `sources` — название, последняя сумма, валюта и дата обновления;
+    `charges` — что списывают в этом месяце: их легко забыть, когда
+    переписываешь остатки со счетов.
+    """
+    lines = [
+        f"{month_title(month)} закрывается сегодня. "
+        "Обнови суммы по счетам во вкладке «Средства».",
+    ]
+
+    if sources:
+        lines.append("")
+        lines.append("Сейчас записано:")
+        for title, amount, currency, updated in sources:
+            # без даты обновления суммы нет вовсе — показывать ноль было бы враньём
+            body = f"{_amount(amount, currency)} · {updated}" if updated else "сумма не вводилась"
+            lines.append(f"· {title} — {body}")
+
+    if charges:
+        lines.append("")
+        lines.append("Не забудь про списания этого месяца:")
+        for title, amount, currency in charges:
+            lines.append(f"· {title} — {_amount(amount, currency)}")
+
+    lines.append("")
+    lines.append("Первого числа посчитаю итог месяца и покажу расхождение с учётом.")
+    return "\n".join(lines)
+
+
 def format_month_result(
     month: str,
     income: Decimal,

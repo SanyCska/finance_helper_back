@@ -6,6 +6,7 @@ import asyncio
 import calendar
 import datetime as dt
 import logging
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -32,6 +33,11 @@ def is_reminder_day(today: dt.date) -> bool:
 def is_month_result_day(today: dt.date) -> bool:
     """Итог месяца и просьбу сверить шлём первого числа следующего."""
     return today.day == 1
+
+
+def is_last_day(today: dt.date) -> bool:
+    """Свести средства просим в последний день месяца."""
+    return today.day == calendar.monthrange(today.year, today.month)[1]
 
 
 async def send_reminder(bot: Bot) -> None:
@@ -73,6 +79,51 @@ def month_result_text(telegram_id: int, today: dt.date | None = None) -> str | N
         )
 
 
+def funds_reminder_text(telegram_id: int, today: dt.date | None = None) -> str | None:
+    """Напоминание свести средства. `None` — источников нет, напоминать нечего."""
+    today = today or dt.date.today()
+    month = today.replace(day=1)
+
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.telegram_id == telegram_id))
+        if user is None:
+            return None
+
+        states = funds.source_states(db, user)
+        if not states:
+            return None
+
+        rows = [
+            (
+                state.source.title,
+                state.amount_original,
+                state.source.currency,
+                state.updated_on.strftime("%d.%m") if state.updated_on else None,
+            )
+            for state in states
+        ]
+        charges = [
+            (item.title, item.amount, item.currency)
+            for item in recurring.list_items(db, user, only_active=True)
+            if recurring.charges_in_month(item, month)
+        ]
+        return texts.format_funds_reminder(stats.format_month(month), rows, charges)
+
+
+async def send_funds_reminder(bot: Bot) -> None:
+    today = dt.date.today()
+    if not is_last_day(today):
+        return
+    for telegram_id in get_settings().allowed_telegram_ids:
+        try:
+            text = funds_reminder_text(telegram_id, today)
+            if text is None:
+                continue
+            await bot.send_message(telegram_id, text, reply_markup=webapp_keyboard())
+        except Exception:
+            logger.exception("Не удалось отправить напоминание о средствах %s", telegram_id)
+
+
 async def send_month_result(bot: Bot) -> None:
     today = dt.date.today()
     if not is_month_result_day(today):
@@ -96,18 +147,27 @@ async def main() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
 
-    scheduler = AsyncIOScheduler(timezone="UTC")
+    # расписание идёт по местному времени владельца: напоминание в четыре часа
+    # дня должно приходить в четыре часа дня и зимой, и летом
+    tz = ZoneInfo(settings.timezone)
+    scheduler = AsyncIOScheduler(timezone=tz)
     scheduler.add_job(
         send_reminder,
-        CronTrigger(hour=settings.reminder_hour, minute=0),
+        CronTrigger(hour=settings.reminder_hour, minute=0, timezone=tz),
         args=[bot],
         id="month-end-reminder",
     )
     scheduler.add_job(
         send_month_result,
-        CronTrigger(hour=settings.reminder_hour, minute=10),
+        CronTrigger(hour=settings.reminder_hour, minute=10, timezone=tz),
         args=[bot],
         id="month-result",
+    )
+    scheduler.add_job(
+        send_funds_reminder,
+        CronTrigger(hour=settings.funds_reminder_hour, minute=0, timezone=tz),
+        args=[bot],
+        id="funds-reminder",
     )
     scheduler.start()
 

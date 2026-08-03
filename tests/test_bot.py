@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from app.bot import texts
 from app.bot.handlers import is_allowed
-from app.bot.main import is_month_result_day, is_reminder_day
+from app.bot.main import is_last_day, is_month_result_day, is_reminder_day
 from app.services.importer import ImportReport
 
 
@@ -96,3 +96,37 @@ def test_month_result_without_sources_does_not_ask_to_check():
 
     assert "Сальдо: \u2212$200" in message
     assert "Средства" not in message
+
+
+def test_funds_reminder_fires_on_the_last_day():
+    assert is_last_day(dt.date(2026, 8, 31)) is True
+    assert is_last_day(dt.date(2026, 8, 30)) is False
+    # февраль високосного 2028 года заканчивается 29-го
+    assert is_last_day(dt.date(2028, 2, 29)) is True
+
+
+def test_funds_reminder_lists_sources_and_charges():
+    message = texts.format_funds_reminder(
+        month="2026-08",
+        sources=[
+            ("Сербия, карта", Decimal("4200"), "USD", "12.08"),
+            ("Наличные EUR", Decimal("1500.50"), "EUR", None),
+        ],
+        charges=[("Квартира", Decimal("650"), "EUR"), ("Netflix", Decimal("15.99"), "USD")],
+    )
+
+    assert message.startswith("Август 2026 закрывается сегодня.")
+    assert "· Сербия, карта — 4 200 USD · 12.08" in message
+    assert "· Наличные EUR — сумма не вводилась" in message
+    assert "· Квартира — 650 EUR" in message
+    assert "· Netflix — 15.99 USD" in message
+
+
+def test_funds_reminder_without_charges_skips_the_block():
+    message = texts.format_funds_reminder(
+        month="2026-08",
+        sources=[("Наличные", Decimal("100"), "USD", "01.08")],
+        charges=[],
+    )
+
+    assert "списания" not in message

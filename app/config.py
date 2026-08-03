@@ -43,7 +43,12 @@ class Settings(BaseSettings):
     fx_http_timeout_s: float = 10.0
     fx_concurrency: int = 8
 
+    #: часовой пояс расписаний бота: напоминания должны приходить по местному
+    #: времени владельца, а не по UTC
+    timezone: str = "Europe/Belgrade"
     reminder_hour: int = 11
+    #: во сколько напоминать свести средства в последний день месяца
+    funds_reminder_hour: int = 16
 
     @field_validator("excluded_categories", mode="before")
     @classmethod
