@@ -336,10 +336,18 @@ class MonthCheckOut(BaseModel):
     opening: Decimal | None = None
     closing: Decimal | None = None
     is_saved: bool
+    #: есть ли остаток на начало месяца; без него сверять не с чем
+    comparable: bool = True
     note: str | None = None
 
 
 class MonthCheckIn(BaseModel):
+    note: str | None = None
+
+
+class BalancePatch(BaseModel):
+    amount: Decimal | None = Field(default=None, ge=0)
+    date: dt.date | None = None
     note: str | None = None
 
 

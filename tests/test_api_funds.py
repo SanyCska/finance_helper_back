@@ -120,6 +120,7 @@ def test_month_check_reports_discrepancy(client: TestClient, db: Session, user: 
 
 def test_saved_check_shows_up_in_history(client: TestClient):
     source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "400", "date": "2026-06-30"})
     client.put(f"/api/funds/{source_id}/balance", json={"amount": "500", "date": "2026-07-31"})
 
     saved = client.post("/api/funds/checks/2026-07", json={"note": "сошлось"}).json()
@@ -128,6 +129,67 @@ def test_saved_check_shows_up_in_history(client: TestClient):
     assert saved["is_saved"] is True
     assert [item["month"] for item in history] == ["2026-07"]
     assert history[0]["note"] == "сошлось"
+
+
+def test_first_month_check_cannot_be_saved(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "14000", "date": "2026-07-20"})
+
+    payload = client.get("/api/funds/checks/2026-07").json()
+    saved = client.post("/api/funds/checks/2026-07", json={})
+
+    assert payload["comparable"] is False
+    assert saved.status_code == 409
+    assert "первый месяц" in saved.json()["detail"].lower()
+
+
+def test_balance_can_be_edited(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "100", "date": "2026-07-31"})
+    balance_id = client.get(f"/api/funds/{source_id}/history").json()[0]["id"]
+
+    fixed = client.patch(
+        f"/api/funds/{source_id}/balance/{balance_id}",
+        json={"amount": "250", "note": "опечатка"},
+    ).json()
+
+    assert fixed["amount_original"] == "250.0000"
+    assert fixed["note"] == "опечатка"
+    # правка снимка, а не новая запись: история не растёт
+    assert len(client.get(f"/api/funds/{source_id}/history").json()) == 1
+    assert client.get("/api/funds").json()["total_base"] == "250.00"
+
+
+def test_balance_can_be_deleted(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "100", "date": "2026-06-30"})
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "999", "date": "2026-07-31"})
+    wrong = client.get(f"/api/funds/{source_id}/history").json()[0]["id"]
+
+    client.delete(f"/api/funds/{source_id}/balance/{wrong}")
+
+    history = client.get(f"/api/funds/{source_id}/history").json()
+    assert [item["amount_original"] for item in history] == ["100.0000"]
+    # итог вернулся к предыдущему снимку
+    assert client.get("/api/funds").json()["total_base"] == "100.00"
+
+
+def test_balance_of_foreign_source_is_not_found(client: TestClient):
+    a = client.post("/api/funds", json={"title": "Сербия", "amount": "10"}).json()["id"]
+    b = client.post("/api/funds", json={"title": "Наличные", "amount": "20"}).json()["id"]
+    balance_id = client.get(f"/api/funds/{a}/history").json()[0]["id"]
+
+    # запись принадлежит другому источнику — правка через чужой id запрещена
+    assert client.delete(f"/api/funds/{b}/balance/{balance_id}").status_code == 404
+
+
+def test_source_can_be_renamed(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия", "amount": "10"}).json()["id"]
+
+    renamed = client.patch(f"/api/funds/{source_id}", json={"title": "  Сербия, карта  "}).json()
+
+    assert renamed["title"] == "Сербия, карта"
+    assert renamed["amount_original"] == "10.0000"
 
 
 # --- подписки -------------------------------------------------------------

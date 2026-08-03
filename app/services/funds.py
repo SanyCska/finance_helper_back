@@ -60,6 +60,10 @@ class MonthCheckResult:
     opening: Decimal
     closing: Decimal
     saved: MonthCheck | None
+    #: есть ли остаток на начало месяца. Без него сверять не с чем: нулевое
+    #: начало — это не «денег не было», а «ещё не вели учёт», и вся сумма
+    #: на счетах выглядела бы незаписанным доходом
+    comparable: bool = True
 
 
 # --- источники ------------------------------------------------------------
@@ -124,6 +128,42 @@ def set_balance(
     return snapshot
 
 
+def update_balance(
+    db: Session,
+    balance: FundBalance,
+    amount: Decimal | None = None,
+    day: dt.date | None = None,
+    note: str | None = None,
+    note_set: bool = False,
+) -> FundBalance:
+    """Правка снимка. Сумму и дату пересчитываем через курс на новую дату."""
+    if amount is not None:
+        balance.amount_original = amount
+    if day is not None:
+        balance.date = day
+    if note_set:
+        balance.note = note
+
+    if amount is not None or day is not None:
+        fx = FxService(db)
+        fx.ensure_rates([(balance.date, balance.currency)])
+        amount_base, rate, fx_status = fx.convert(
+            balance.amount_original, balance.currency, balance.date
+        )
+        balance.amount_base = amount_base
+        balance.fx_rate = rate
+        balance.fx_status = fx_status
+
+    db.commit()
+    db.refresh(balance)
+    return balance
+
+
+def delete_balance(db: Session, balance: FundBalance) -> None:
+    db.delete(balance)
+    db.commit()
+
+
 def history(db: Session, source_id: int, limit: int = 60) -> list[FundBalance]:
     return list(
         db.scalars(
@@ -179,6 +219,19 @@ def tracked_saldo(db: Session, user: User, month: dt.date) -> Decimal:
     return stats.month_summary(transactions, income).saldo.quantize(_CENTS)
 
 
+def has_opening(db: Session, user: User, month: dt.date) -> bool:
+    """Был ли хоть один снимок баланса до начала месяца."""
+    first, _ = stats.month_bounds(month)
+    return (
+        db.scalar(
+            select(FundBalance.id)
+            .where(FundBalance.user_id == user.id, FundBalance.date < first)
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def get_check(db: Session, user: User, month: dt.date) -> MonthCheck | None:
     return db.scalar(
         select(MonthCheck).where(MonthCheck.user_id == user.id, MonthCheck.month == month)
@@ -205,16 +258,19 @@ def month_check(db: Session, user: User, month: dt.date) -> MonthCheckResult:
             opening=opening,
             closing=closing,
             saved=saved,
+            comparable=True,
         )
 
+    comparable = has_opening(db, user, month)
     return MonthCheckResult(
         month=month,
-        real_saldo=real,
+        real_saldo=real if comparable else ZERO,
         tracked_saldo=tracked,
-        discrepancy=(real - tracked).quantize(_CENTS),
+        discrepancy=(real - tracked).quantize(_CENTS) if comparable else ZERO,
         opening=opening,
         closing=closing,
         saved=None,
+        comparable=comparable,
     )
 
 
@@ -262,5 +318,8 @@ def pending_check_month(db: Session, user: User, today: dt.date | None = None) -
     if get_check(db, user, previous) is not None:
         return None
     if not list_sources(db, user):
+        return None
+    # первый месяц учёта сверять не с чем: остатка на его начало нет
+    if not has_opening(db, user, previous):
         return None
     return previous
