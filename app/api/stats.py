@@ -72,7 +72,7 @@ def month_summary(
 ) -> MonthSummaryOut:
     target = _month(month)
     # подписки начисляются лениво: планировщик мог не отработать
-    recurring.run(db, user)
+    recurring.run_safely(db, user)
 
     transactions = stats.fetch_month(db, user.id, target)
     previous = stats.fetch_month(db, user.id, stats.shift_month(target, -1))

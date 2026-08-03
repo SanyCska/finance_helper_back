@@ -72,7 +72,7 @@ def list_recurring(
     settings: Settings = Depends(get_settings),
 ) -> RecurringListOut:
     # чтение списка — удобный момент дочислить пропущенные месяцы
-    generated = recurring.run(db, user)
+    generated = recurring.run_safely(db, user)
     items = recurring.list_items(db, user)
     monthly_base = _monthly_base(db, items)
     return RecurringListOut(

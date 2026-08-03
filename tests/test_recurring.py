@@ -227,3 +227,26 @@ def test_paused_subscription_has_no_charges(db: Session, user: User):
     db.commit()
 
     assert recurring.charges_in_month(item, dt.date(2026, 8, 1)) is False
+
+
+def test_run_survives_racing_duplicate(db: Session, user: User, monkeypatch):
+    """Два запроса начисляют один месяц: второй ловит уникальный индекс, не 500."""
+    item = add_item(db, user, period_months=1, starts_on=dt.date(2026, 7, 1))
+    recurring.run(db, user, TODAY)  # июль начислен
+
+    # имитируем гонку: проверка «что уже начислено» ничего не увидела
+    monkeypatch.setattr(recurring, "charged_months", lambda *_: set())
+
+    assert recurring.run(db, user, TODAY) == 0
+    assert len(charges(db, user)) == 1
+    assert item.id is not None  # сессия жива после отката
+
+
+def test_run_safely_swallows_any_error(db: Session, user: User, monkeypatch):
+    """Ошибка начисления не должна ронять экран, который его вызвал."""
+    def boom(*args, **kwargs):
+        raise RuntimeError("что угодно: сеть, база, наш же баг")
+
+    monkeypatch.setattr(recurring, "run", boom)
+
+    assert recurring.run_safely(db, user) == 0

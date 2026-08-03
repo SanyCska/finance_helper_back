@@ -17,9 +17,11 @@ from __future__ import annotations
 
 import calendar
 import datetime as dt
+import logging
 from decimal import Decimal
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -32,6 +34,8 @@ from app.models import (
 )
 from app.services import stats
 from app.services.fx import FxService
+
+logger = logging.getLogger(__name__)
 
 ZERO = Decimal(0)
 _CENTS = Decimal("0.01")
@@ -195,8 +199,29 @@ def run(db: Session, user: User, today: dt.date | None = None) -> int:
 
     if pending:
         db.add_all(pending)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # параллельный запрос успел начислить те же месяцы между нашей
+            # проверкой и коммитом — уникальный индекс не даёт задвоить,
+            # а падать здесь не из-за чего
+            db.rollback()
+            return 0
     return created
+
+
+def run_safely(db: Session, user: User, today: dt.date | None = None) -> int:
+    """`run`, который не роняет вызвавший его экран.
+
+    Начисление — побочная задача при чтении сводки или списка подписок:
+    какой бы ни была его ошибка, показать данные важнее, чем доначислить.
+    """
+    try:
+        return run(db, user, today)
+    except Exception:
+        logger.exception("Не удалось доначислить подписки")
+        db.rollback()
+        return 0
 
 
 def _comment(item: RecurringExpense) -> str:

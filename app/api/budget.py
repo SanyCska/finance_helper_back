@@ -230,7 +230,7 @@ def plan_vs_fact(
 ) -> PlanVsFactOut:
     target = _month(month)
     # завершившийся месяц мог остаться без начислений подписок — дочисляем
-    recurring.run(db, user)
+    recurring.run_safely(db, user)
 
     plan = budget.get_plan(db, user, target)
     plan_lines = list(plan.lines) if plan else []

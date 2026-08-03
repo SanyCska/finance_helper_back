@@ -379,3 +379,19 @@ def test_line_without_categories_has_no_fact(client: TestClient):
     assert line["category_names"] == []
     assert line["fact"] is None
     assert line["diff"] is None
+
+
+def test_subscriptions_list_survives_charging_failure(client: TestClient, monkeypatch):
+    """Список подписок обязан открыться, даже если доначисление упало."""
+    from app.services import recurring
+
+    client.post("/api/recurring", json={"title": "Netflix", "amount": "10"})
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("генератор сломан")
+
+    monkeypatch.setattr(recurring, "run", boom)
+    response = client.get("/api/recurring")
+
+    assert response.status_code == 200
+    assert [item["title"] for item in response.json()["items"]] == ["Netflix"]
