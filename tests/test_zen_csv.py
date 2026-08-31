@@ -155,3 +155,28 @@ def test_windows_1251_content_is_decoded():
     result = parse_zen_csv(text.encode("cp1251"))
 
     assert result.rows[0].category_name == "Доставки еды"
+
+
+SHIFTED = (
+    '2026-08-01;"Доставки еды";;;"Сербия ";"2500";RSD;"Сербия ";"0";RSD;'
+    '"2026-08-01 15:41:02";"2026-08-01 15:41:03";'
+)
+OTHER_AMOUNT = (
+    '2026-08-01;"Доставки еды";;;"Сербия ";"2501";RSD;"Сербия ";"0";RSD;'
+    '"2026-08-01 14:41:02";"2026-08-01 14:41:03";'
+)
+
+
+def test_dedup_key_ignores_created_date():
+    """Ключ не зависит от времени создания: оно едет вместе с таймзоной."""
+    early = parse_zen_csv(build(OUTCOME))
+    late = parse_zen_csv(build(SHIFTED))
+
+    assert early.rows[0].dedup_key == late.rows[0].dedup_key
+
+
+def test_dedup_key_differs_on_amount():
+    a = parse_zen_csv(build(OUTCOME))
+    b = parse_zen_csv(build(OTHER_AMOUNT))
+
+    assert a.rows[0].dedup_key != b.rows[0].dedup_key

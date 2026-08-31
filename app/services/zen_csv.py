@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import hashlib
 import io
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -51,6 +52,28 @@ class ParsedRow:
     currency: str
     zen_created_at: dt.datetime | None
     zen_changed_at: dt.datetime | None
+
+    @property
+    def dedup_key(self) -> str:
+        """Отпечаток операции по содержанию.
+
+        Время создания в него не входит: Дзен отдаёт `createdDate` в
+        таймзоне устройства на момент выгрузки, и при смене пояса оно
+        едет у всей истории разом.
+        """
+        parts = (
+            self.date.isoformat(),
+            self.category_name,
+            self.account_name,
+            self.payee or "",
+            self.comment or "",
+            self.direction.value,
+            # normalize(): в базе сумма лежит как 2000.5000, и миграция
+            # срезает хвостовые нули — иначе отпечатки разойдутся
+            format(self.amount_original.normalize(), "f"),
+            self.currency,
+        )
+        return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
 @dataclass
