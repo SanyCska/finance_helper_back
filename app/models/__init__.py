@@ -75,7 +75,7 @@ class User(Base):
 class Transaction(Base):
     __tablename__ = "transactions"
     __table_args__ = (
-        UniqueConstraint("user_id", "zen_created_at", name="uq_tx_user_zen_created"),
+        UniqueConstraint("user_id", "dedup_key", "dedup_seq", name="uq_tx_user_dedup"),
         # одно начисление на подписку и месяц: генератор идемпотентен
         UniqueConstraint("recurring_id", "recurring_month", name="uq_tx_recurring_month"),
         Index("ix_tx_user_date", "user_id", "date"),
@@ -103,6 +103,11 @@ class Transaction(Base):
     source: Mapped[TxSource] = mapped_column(_enum(TxSource), default=TxSource.CSV)
     zen_created_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
     zen_changed_at: Mapped[dt.datetime | None] = mapped_column(DateTime, nullable=True)
+
+    #: отпечаток содержания операции, см. ParsedRow.dedup_key
+    dedup_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    #: порядковый номер среди операций с тем же отпечатком
+    dedup_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     #: начисление подписки: ссылка на регулярную трату и месяц, за который начислено
     recurring_id: Mapped[int | None] = mapped_column(

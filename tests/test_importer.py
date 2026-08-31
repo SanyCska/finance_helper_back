@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.models import FxStatus, ImportBatch, Transaction, TxSource
+from app.models import Direction, FxStatus, ImportBatch, Transaction, TxSource
 from app.services.importer import import_csv
 from tests.test_fx import FakeProvider
 
@@ -118,22 +119,100 @@ def test_import_batch_is_recorded(db: Session, user):
     assert batch.user_id == user.id
 
 
-def test_duplicate_created_at_within_one_file_is_counted_once(db: Session, user):
-    duplicated = row("2026-07-01", "Кофе", "300", "2026-07-01 09:00:00")
-    report = import_csv(
-        db, user, "zen.csv", build(ROWS[0], duplicated), provider=provider_with_rates()
-    )
-
-    assert report.rows_new == 1
-    assert report.rows_duplicate == 1
-    assert db.query(Transaction).count() == 1
-
-
-def test_rows_without_created_at_are_always_inserted(db: Session, user):
+def test_rows_without_created_at_are_deduplicated(db: Session, user):
+    """Пустой createdDate больше не отключает дедуп: ключ есть у всех строк."""
     no_created = (
         '2026-07-09;"Кофе";;;"Сербия ";"300";RSD;"Сербия ";"0";RSD;;;'
     )
     import_csv(db, user, "zen.csv", build(no_created), provider=provider_with_rates())
-    import_csv(db, user, "zen.csv", build(no_created), provider=provider_with_rates())
+    report = import_csv(db, user, "zen.csv", build(no_created), provider=provider_with_rates())
 
+    assert report.rows_new == 0
+    assert db.query(Transaction).count() == 1
+
+
+def test_import_fills_dedup_columns(db: Session, user):
+    import_csv(db, user, "zen.csv", build(*ROWS), provider=provider_with_rates())
+
+    saved = db.query(Transaction).order_by(Transaction.date).all()
+    assert all(t.dedup_key for t in saved)
+    assert all(t.dedup_seq == 0 for t in saved)
+
+
+def shift_hour(csv_row: str) -> str:
+    """Сдвинуть время создания на час, как при смене таймзоны устройства."""
+
+    def bump(match: re.Match[str]) -> str:
+        return f"{match.group(1)} {int(match.group(2)) + 1:02d}:{match.group(3)}"
+
+    return re.sub(r"(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}:\d{2})", bump, csv_row)
+
+
+def test_timezone_shift_does_not_duplicate(db: Session, user):
+    """Прод-баг: выгрузка из другого пояса дублировала всю историю."""
+    import_csv(db, user, "aug.csv", build(*ROWS), provider=provider_with_rates())
+
+    shifted = build(*(shift_hour(r) for r in ROWS))
+    report = import_csv(db, user, "sep.csv", shifted, provider=provider_with_rates())
+
+    assert report.rows_new == 0
+    assert report.rows_duplicate == 3
+    assert db.query(Transaction).count() == 3
+
+
+def test_repeated_identical_operations_all_imported(db: Session, user):
+    """Четыре поездки по 75 за день — это четыре операции, а не одна."""
+    same = [row("2026-07-05", "Транспорт", "75", f"2026-07-05 0{n}:00:00") for n in range(4)]
+    report = import_csv(db, user, "zen.csv", build(*same), provider=provider_with_rates())
+
+    assert report.rows_new == 4
+    assert db.query(Transaction).count() == 4
+    assert sorted(t.dedup_seq for t in db.query(Transaction)) == [0, 1, 2, 3]
+
+
+def test_partial_overlap_adds_only_missing(db: Session, user):
+    """В базе одна поездка, в файле две — добавится ровно одна."""
+    one = row("2026-07-05", "Транспорт", "75", "2026-07-05 01:00:00")
+    two = row("2026-07-05", "Транспорт", "75", "2026-07-05 02:00:00")
+    import_csv(db, user, "a.csv", build(one), provider=provider_with_rates())
+
+    report = import_csv(db, user, "b.csv", build(one, two), provider=provider_with_rates())
+
+    assert report.rows_new == 1
+    assert report.rows_duplicate == 1
     assert db.query(Transaction).count() == 2
+
+
+def test_new_operations_still_arrive(db: Session, user):
+    """Дозаливка: старое опознано, новое добавлено."""
+    import_csv(db, user, "a.csv", build(*ROWS), provider=provider_with_rates())
+    extra = row("2026-07-10", "Кофе", "350", "2026-07-10 09:00:00")
+
+    report = import_csv(db, user, "b.csv", build(*ROWS, extra), provider=provider_with_rates())
+
+    assert report.rows_new == 1
+    assert report.rows_duplicate == 3
+    assert db.query(Transaction).count() == 4
+
+
+def test_manual_transaction_is_not_matched(db: Session, user):
+    """Ручная операция не гасит строку CSV: у неё нет отпечатка."""
+    db.add(
+        Transaction(
+            user_id=user.id,
+            date=dt.date(2026, 7, 1),
+            category_name="Кофе",
+            account_name="Сербия ",
+            direction=Direction.OUTCOME,
+            amount_original=Decimal("300"),
+            currency="RSD",
+            source=TxSource.MANUAL,
+            fx_status=FxStatus.PENDING,
+        )
+    )
+    db.commit()
+
+    report = import_csv(db, user, "zen.csv", build(*ROWS), provider=provider_with_rates())
+
+    assert report.rows_new == 3
+    assert db.query(Transaction).count() == 4

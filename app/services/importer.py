@@ -1,15 +1,21 @@
 """Импорт выгрузки Дзен-мани в базу.
 
-Дедупликация — по `createdDate` из выгрузки: в реальных дампах это поле уникально
-для каждой операции, поэтому повторная заливка полного дампа не создаёт дублей.
-Строки без `createdDate` дедуплицировать нечем, они вставляются всегда.
+Дедупликация — по отпечатку содержания операции (`ParsedRow.dedup_key`)
+с учётом кратности: одинаковые операции в один день бывают настоящими,
+поэтому строка считается дублем, только если таких же в базе уже не
+меньше, чем встретилось в файле до неё.
+
+По `createdDate` дедуплицировать нельзя: Дзен отдаёт его в таймзоне
+устройства на момент выгрузки, и смена пояса сдвигает ключи всей
+истории разом.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import FxStatus, ImportBatch, Transaction, TxSource, User
@@ -43,13 +49,15 @@ def import_csv(
     fx = FxService(db, provider=provider)
     fx.ensure_rates((row.date, row.currency) for row in parsed.rows)
 
-    existing = {
-        created_at
-        for (created_at,) in db.execute(
-            select(Transaction.zen_created_at).where(
+    counts_in_db: dict[str, int] = {
+        key: count
+        for key, count in db.execute(
+            select(Transaction.dedup_key, func.count())
+            .where(
                 Transaction.user_id == user.id,
-                Transaction.zen_created_at.is_not(None),
+                Transaction.dedup_key.is_not(None),
             )
+            .group_by(Transaction.dedup_key)
         )
     }
 
@@ -62,17 +70,20 @@ def import_csv(
         ],
     )
 
-    seen_in_file: set = set()
+    seen_in_file: Counter[str] = Counter()
     to_insert: list[Transaction] = []
     for row in parsed.rows:
-        key = row.zen_created_at
-        if key is not None and (key in existing or key in seen_in_file):
+        key = row.dedup_key
+        seq = seen_in_file[key]
+        seen_in_file[key] += 1
+
+        # строка уже есть в базе, если её порядковый номер укладывается
+        # в число сохранённых операций с тем же отпечатком
+        if seq < counts_in_db.get(key, 0):
             report.rows_duplicate += 1
             continue
-        if key is not None:
-            seen_in_file.add(key)
 
-        transaction = _build_transaction(row, user, fx)
+        transaction = _build_transaction(row, user, fx, seq)
         if transaction.fx_status is FxStatus.PENDING:
             report.pending_fx += 1
         to_insert.append(transaction)
@@ -96,7 +107,7 @@ def import_csv(
     return report
 
 
-def _build_transaction(row: ParsedRow, user: User, fx: FxService) -> Transaction:
+def _build_transaction(row: ParsedRow, user: User, fx: FxService, seq: int) -> Transaction:
     amount_base, rate, status = fx.convert(row.amount_original, row.currency, row.date)
     return Transaction(
         user_id=user.id,
@@ -112,6 +123,8 @@ def _build_transaction(row: ParsedRow, user: User, fx: FxService) -> Transaction
         fx_rate=rate,
         fx_status=status,
         source=TxSource.CSV,
+        dedup_key=row.dedup_key,
+        dedup_seq=seq,
         zen_created_at=row.zen_created_at,
         zen_changed_at=row.zen_changed_at,
     )
