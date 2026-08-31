@@ -107,10 +107,8 @@ jobs:
           } | ssh "$SSH_USER@$SSH_HOST" 'umask 077 && cat > /opt/finance/.env'
 
       - name: Обновить стек на сервере
-        env:
-          GHCR_PAT: ${{ secrets.GHCR_PAT }}
+        # образы в GHCR публичные, docker login не нужен
         run: |
-          printf '%s' "$GHCR_PAT" | ssh "$SSH_USER@$SSH_HOST" 'docker login ghcr.io -u ${{ github.repository_owner }} --password-stdin'
           ssh "$SSH_USER@$SSH_HOST" 'cd /opt/finance \
             && docker compose pull postgres api bot caddy \
             && docker compose up -d --remove-orphans postgres api bot caddy \
