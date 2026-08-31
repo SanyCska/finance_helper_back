@@ -35,7 +35,6 @@ Postgres финансов наружу не торчит вовсе; попас�
 | `SSH_HOST` | `147.45.238.246` |
 | `SSH_USER` | `root` |
 | `SSH_KEY` | приватный ключ деплоя; публичная часть уже в `authorized_keys` сервера — подойдёт содержимое `~/.ssh/tripos_deploy` (тот же ключ, что в секретах TripOS) |
-| `GHCR_PAT` | PAT c `read:packages` — сервер логинится им в GHCR перед pull (тот же, что у TripOS) |
 
 Только в **finance_helper_back** (уходят в `/opt/finance/.env`):
 
@@ -120,3 +119,12 @@ curl -s http://127.0.0.1:8001/health   # api напрямую, минуя web
 
 Обход авторизации (`DEV_BYPASS_AUTH`) в проде не работает по построению:
 `ENV=production` зашит в compose, и флаг игнорируется.
+
+**GHCR.** Образы `finance-helper-api` и `finance-helper-web` публичные, поэтому
+сервер тянет их анонимно и `docker login` в деплое не нужен — секрет `GHCR_PAT`
+для финансов больше не используется (у TripOS образы приватные, там логин остался).
+
+Если образы когда-нибудь станут приватными, вернуть шаг логина в оба workflow.
+Симптом протухших кред на сервере: `error from registry: denied` при pull даже
+публичного образа — docker подставляет сохранённый логин из `/root/.docker/config.json`.
+Лечится `docker logout ghcr.io` на сервере.
