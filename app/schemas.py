@@ -338,8 +338,10 @@ class MonthCheckOut(BaseModel):
     opening: Decimal | None = None
     closing: Decimal | None = None
     is_saved: bool
-    #: есть ли остаток на начало месяца; без него сверять не с чем
+    #: есть ли точка отсчёта: остаток на начало месяца или снимок внутри него
     comparable: bool = True
+    #: первый месяц учёта сверяется от даты первого снимка, а не с начала
+    since: dt.date | None = None
     note: str | None = None
 
 

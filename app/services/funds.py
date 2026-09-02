@@ -17,7 +17,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -60,10 +60,13 @@ class MonthCheckResult:
     opening: Decimal
     closing: Decimal
     saved: MonthCheck | None
-    #: есть ли остаток на начало месяца. Без него сверять не с чем: нулевое
-    #: начало — это не «денег не было», а «ещё не вели учёт», и вся сумма
-    #: на счетах выглядела бы незаписанным доходом
+    #: можно ли сверять: нужна точка отсчёта — остаток на начало месяца либо
+    #: первый снимок внутри него. Без неё нулевое начало значило бы не «денег
+    #: не было», а «ещё не вели учёт», и вся сумма выглядела бы доходом
     comparable: bool = True
+    #: для первого месяца учёта — дата первого снимка, от которой считаем.
+    #: У обычного месяца отсчёт идёт с его начала и поле пустое
+    since: dt.date | None = None
 
 
 # --- источники ------------------------------------------------------------
@@ -210,13 +213,38 @@ def balance_history(db: Session, user: User, months: list[dt.date]) -> list[Bala
 # --- сверка месяца --------------------------------------------------------
 
 
-def tracked_saldo(db: Session, user: User, month: dt.date) -> Decimal:
-    """Сальдо месяца по введённым данным: доход минус траты."""
+def tracked_saldo(
+    db: Session, user: User, month: dt.date, since: dt.date | None = None
+) -> Decimal:
+    """Сальдо месяца по введённым данным: доход минус траты.
+
+    `since` — дата первого снимка, если месяц сверяется не целиком. Операции
+    этого дня и раньше в снимок уже вошли, поэтому считаем строго после него.
+    Месячный доход дробить нечем: он задаётся суммой на месяц, без дат, — и
+    засчитывается целиком.
+    """
     from app.services import budget  # локальный импорт: budget зависит от stats, не от funds
 
     transactions = stats.fetch_month(db, user.id, month)
+    if since is not None:
+        transactions = [item for item in transactions if item.date > since]
     income, _, _ = budget.get_income(db, user, month)
     return stats.month_summary(transactions, income).saldo.quantize(_CENTS)
+
+
+def first_balance_date(db: Session, user: User, month: dt.date) -> dt.date | None:
+    """Дата первого снимка внутри месяца."""
+    first, last = stats.month_bounds(month)
+    return db.scalar(
+        select(FundBalance.date)
+        .where(
+            FundBalance.user_id == user.id,
+            FundBalance.date >= first,
+            FundBalance.date <= last,
+        )
+        .order_by(FundBalance.date)
+        .limit(1)
+    )
 
 
 def has_opening(db: Session, user: User, month: dt.date) -> bool:
@@ -238,30 +266,24 @@ def get_check(db: Session, user: User, month: dt.date) -> MonthCheck | None:
     )
 
 
-def month_check(db: Session, user: User, month: dt.date) -> MonthCheckResult:
-    """Расчёт сверки: реальное движение средств против учтённого."""
-    saved = get_check(db, user, month)
-    tracked = tracked_saldo(db, user, month)
+def _fresh_check(db: Session, user: User, month: dt.date) -> MonthCheckResult:
+    """Расчёт по текущим данным, без оглядки на подтверждённую сверку.
 
+    Обычно отсчёт идёт от остатка на начало месяца. В первый месяц учёта его
+    нет, и точкой отсчёта становится первый снимок внутри месяца: сравниваем
+    движение от него до конца месяца с операциями за тот же отрезок. Иначе
+    первый месяц не сверялся бы вовсе, хотя суммы по счетам уже введены.
+    """
     first, last = stats.month_bounds(month)
-    opening = total_base(db, user, first - dt.timedelta(days=1))
+    opened = has_opening(db, user, month)
+    since = None if opened else first_balance_date(db, user, month)
+    comparable = opened or since is not None
+
+    opening = total_base(db, user, since or first - dt.timedelta(days=1))
     closing = total_base(db, user, last)
     real = (closing - opening).quantize(_CENTS)
+    tracked = tracked_saldo(db, user, month, since)
 
-    if saved is not None:
-        # подтверждённая сверка не пересчитывается: балансы могли уйти вперёд
-        return MonthCheckResult(
-            month=month,
-            real_saldo=saved.real_saldo,
-            tracked_saldo=saved.tracked_saldo,
-            discrepancy=saved.discrepancy,
-            opening=opening,
-            closing=closing,
-            saved=saved,
-            comparable=True,
-        )
-
-    comparable = has_opening(db, user, month)
     return MonthCheckResult(
         month=month,
         real_saldo=real if comparable else ZERO,
@@ -271,25 +293,42 @@ def month_check(db: Session, user: User, month: dt.date) -> MonthCheckResult:
         closing=closing,
         saved=None,
         comparable=comparable,
+        since=since,
+    )
+
+
+def month_check(db: Session, user: User, month: dt.date) -> MonthCheckResult:
+    """Сверка месяца: реальное движение средств против учтённого."""
+    result = _fresh_check(db, user, month)
+    saved = get_check(db, user, month)
+    if saved is None:
+        return result
+
+    # подтверждённая сверка не пересчитывается: балансы могли уйти вперёд
+    return replace(
+        result,
+        real_saldo=saved.real_saldo,
+        tracked_saldo=saved.tracked_saldo,
+        discrepancy=saved.discrepancy,
+        saved=saved,
+        comparable=True,
     )
 
 
 def save_check(db: Session, user: User, month: dt.date, note: str | None = None) -> MonthCheck:
     """Зафиксировать сверку месяца по текущим балансам."""
-    tracked = tracked_saldo(db, user, month)
-    first, last = stats.month_bounds(month)
-    opening = total_base(db, user, first - dt.timedelta(days=1))
-    closing = total_base(db, user, last)
-    real = (closing - opening).quantize(_CENTS)
+    # тем же расчётом, что и показываем: иначе сохранённая сверка разъезжалась
+    # бы с той, которую человек видел на экране
+    result = _fresh_check(db, user, month)
 
     record = get_check(db, user, month)
     if record is None:
         record = MonthCheck(user_id=user.id, month=month)
         db.add(record)
 
-    record.real_saldo = real
-    record.tracked_saldo = tracked
-    record.discrepancy = (real - tracked).quantize(_CENTS)
+    record.real_saldo = result.real_saldo
+    record.tracked_saldo = result.tracked_saldo
+    record.discrepancy = result.discrepancy
     record.note = note
     db.commit()
     db.refresh(record)
@@ -319,7 +358,8 @@ def pending_check_month(db: Session, user: User, today: dt.date | None = None) -
         return None
     if not list_sources(db, user):
         return None
-    # первый месяц учёта сверять не с чем: остатка на его начало нет
-    if not has_opening(db, user, previous):
+    # без точки отсчёта — остатка на начало месяца или снимка внутри него —
+    # сверять нечего
+    if not has_opening(db, user, previous) and first_balance_date(db, user, previous) is None:
         return None
     return previous

@@ -68,6 +68,7 @@ def _check_out(result: funds.MonthCheckResult) -> MonthCheckOut:
         closing=result.closing,
         is_saved=result.saved is not None,
         comparable=result.comparable,
+        since=result.since,
         note=result.saved.note if result.saved else None,
     )
 
@@ -260,11 +261,11 @@ def post_check(
     db: Session = Depends(get_db),
 ) -> MonthCheckOut:
     target = _month(month)
-    if not funds.has_opening(db, user, target):
+    if not funds.month_check(db, user, target).comparable:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "Это первый месяц учёта средств: остатка на его начало нет, "
-            "сверять не с чем. Сверка станет возможна со следующего месяца.",
+            "Сверять не с чем: по этому месяцу нет ни остатка на начало, "
+            "ни введённых сумм по счетам.",
         )
     funds.save_check(db, user, target, payload.note)
     return _check_out(funds.month_check(db, user, target))

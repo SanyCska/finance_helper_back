@@ -131,16 +131,30 @@ def test_saved_check_shows_up_in_history(client: TestClient):
     assert history[0]["note"] == "сошлось"
 
 
-def test_first_month_check_cannot_be_saved(client: TestClient):
+def test_first_month_check_is_counted_from_its_first_balance(client: TestClient):
     source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
     client.put(f"/api/funds/{source_id}/balance", json={"amount": "14000", "date": "2026-07-20"})
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "14500", "date": "2026-07-31"})
+
+    payload = client.get("/api/funds/checks/2026-07").json()
+    saved = client.post("/api/funds/checks/2026-07", json={})
+
+    assert payload["comparable"] is True
+    assert payload["since"] == "2026-07-20"
+    assert payload["real_saldo"] == "500.00"
+    assert saved.status_code == 200
+
+
+def test_month_without_balances_cannot_be_saved(client: TestClient):
+    source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
+    client.put(f"/api/funds/{source_id}/balance", json={"amount": "14000", "date": "2026-08-20"})
 
     payload = client.get("/api/funds/checks/2026-07").json()
     saved = client.post("/api/funds/checks/2026-07", json={})
 
     assert payload["comparable"] is False
+    assert payload["since"] is None
     assert saved.status_code == 409
-    assert "первый месяц" in saved.json()["detail"].lower()
 
 
 def test_balance_can_be_edited(client: TestClient):

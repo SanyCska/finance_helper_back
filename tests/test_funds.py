@@ -128,17 +128,27 @@ def test_pending_check_appears_only_with_sources(db: Session, user: User):
     assert funds.pending_check_month(db, user, today) == dt.date(2026, 7, 1)
 
 
-def test_first_month_of_tracking_is_not_offered_for_check(db: Session, user: User):
+def test_first_month_of_tracking_is_offered_from_its_first_balance(db: Session, user: User):
     today = dt.date(2026, 8, 3)
     source = add_source(db, user, "Наличные", "USD")
-    # первый снимок появился внутри июля — остатка на его начало нет
+    # первый снимок появился внутри июля — сверяем от него, а не с начала месяца
     funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+
+    assert funds.pending_check_month(db, user, today) == dt.date(2026, 7, 1)
+
+
+def test_month_without_balances_is_not_offered_for_check(db: Session, user: User):
+    today = dt.date(2026, 8, 3)
+    source = add_source(db, user, "Наличные", "USD")
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 8, 1))
 
     assert funds.pending_check_month(db, user, today) is None
 
 
-def test_first_month_check_is_not_comparable(db: Session, user: User, source: FundSource):
-    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+def test_month_without_any_balance_is_not_comparable(
+    db: Session, user: User, source: FundSource
+):
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 8, 20))
 
     result = funds.month_check(db, user, dt.date(2026, 7, 1))
 
@@ -146,6 +156,48 @@ def test_first_month_check_is_not_comparable(db: Session, user: User, source: Fu
     # весь остаток выглядел бы незаписанным доходом — такое не показываем
     assert result.discrepancy == Decimal(0)
     assert result.real_saldo == Decimal(0)
+
+
+def test_first_month_считается_от_первой_отсечки(db: Session, user: User, source: FundSource):
+    # учёт средств начат в середине месяца: первый снимок и есть точка отсчёта
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+    funds.set_balance(db, user, source, Decimal("14500"), dt.date(2026, 7, 31))
+    budget.set_income(db, user, dt.date(2026, 7, 1), Decimal("500"), None)
+    add_tx(db, user, "2026-07-10", "250", Direction.OUTCOME)
+    add_tx(db, user, "2026-07-25", "300", Direction.OUTCOME)
+
+    result = funds.month_check(db, user, dt.date(2026, 7, 1))
+
+    assert result.comparable is True
+    assert result.since == dt.date(2026, 7, 20)
+    assert result.opening == Decimal("14000.00")
+    assert result.real_saldo == Decimal("500.00")
+    # траты до отсечки уже сидят в первом снимке, считаем только после неё
+    assert result.tracked_saldo == Decimal("200.00")
+    assert result.discrepancy == Decimal("300.00")
+
+
+def test_операции_в_день_отсечки_не_считаются(db: Session, user: User, source: FundSource):
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 31))
+    add_tx(db, user, "2026-07-20", "100", Direction.OUTCOME)
+
+    result = funds.month_check(db, user, dt.date(2026, 7, 1))
+
+    # снимок сделан по факту дня: что записано этим числом, в нём уже учтено
+    assert result.tracked_saldo == Decimal("0.00")
+    assert result.discrepancy == Decimal("0.00")
+
+
+def test_у_полного_месяца_отсечки_нет(db: Session, user: User, source: FundSource):
+    funds.set_balance(db, user, source, Decimal("1000"), dt.date(2026, 6, 30))
+    funds.set_balance(db, user, source, Decimal("1200"), dt.date(2026, 7, 31))
+    add_tx(db, user, "2026-07-01", "50", Direction.OUTCOME)
+
+    result = funds.month_check(db, user, dt.date(2026, 7, 1))
+
+    assert result.since is None
+    assert result.tracked_saldo == Decimal("-50.00")
 
 
 def test_second_month_becomes_comparable(db: Session, user: User, source: FundSource):
@@ -163,3 +215,29 @@ def test_pending_check_clears_after_save(db: Session, user: User, source: FundSo
     funds.save_check(db, user, dt.date(2026, 7, 1))
 
     assert funds.pending_check_month(db, user, today) is None
+
+
+def test_пересчёт_сверки_берёт_свежие_числа(db: Session, user: User, source: FundSource):
+    funds.set_balance(db, user, source, Decimal("1000"), dt.date(2026, 6, 30))
+    funds.set_balance(db, user, source, Decimal("1200"), dt.date(2026, 7, 31))
+    funds.save_check(db, user, dt.date(2026, 7, 1))
+
+    # нашлась забытая запись баланса — «Пересчитать заново» должен её увидеть
+    funds.set_balance(db, user, source, Decimal("1300"), dt.date(2026, 7, 31))
+    record = funds.save_check(db, user, dt.date(2026, 7, 1))
+
+    assert record.real_saldo == Decimal("300.00")
+
+
+def test_сохранённая_сверка_первого_месяца_считается_от_отсечки(
+    db: Session, user: User, source: FundSource
+):
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+    funds.set_balance(db, user, source, Decimal("14500"), dt.date(2026, 7, 31))
+    add_tx(db, user, "2026-07-10", "250", Direction.OUTCOME)
+
+    record = funds.save_check(db, user, dt.date(2026, 7, 1))
+
+    assert record.real_saldo == Decimal("500.00")
+    # трата до отсечки в учтённое сальдо не попала
+    assert record.tracked_saldo == Decimal("0.00")
