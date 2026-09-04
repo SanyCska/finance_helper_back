@@ -233,9 +233,14 @@ def tracked_saldo(
 
 
 def first_balance_date(db: Session, user: User, month: dt.date) -> dt.date | None:
-    """Дата первого снимка внутри месяца."""
+    """Дата первого снимка внутри месяца, после которого в нём есть ещё один.
+
+    Точка отсчёта без единого снимка после неё бесполезна: итог на конец
+    месяца сложится из тех же сумм, движение выйдет нулевым, и сверка покажет
+    «по счетам 0» — как будто деньги весь месяц стояли.
+    """
     first, last = stats.month_bounds(month)
-    return db.scalar(
+    since = db.scalar(
         select(FundBalance.date)
         .where(
             FundBalance.user_id == user.id,
@@ -245,6 +250,18 @@ def first_balance_date(db: Session, user: User, month: dt.date) -> dt.date | Non
         .order_by(FundBalance.date)
         .limit(1)
     )
+    if since is None:
+        return None
+    later = db.scalar(
+        select(FundBalance.id)
+        .where(
+            FundBalance.user_id == user.id,
+            FundBalance.date > since,
+            FundBalance.date <= last,
+        )
+        .limit(1)
+    )
+    return since if later is not None else None
 
 
 def has_opening(db: Session, user: User, month: dt.date) -> bool:

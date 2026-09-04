@@ -36,7 +36,7 @@ from app.services import funds
 
 #: столько первых дней нового месяца введённая сумма ещё читается как
 #: остаток прошлого — тот же срок, что предлагает веб
-DEFAULT_DAYS = 5
+DEFAULT_DAYS = 7
 
 
 def month_start(value: str) -> dt.date:

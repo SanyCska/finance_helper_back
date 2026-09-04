@@ -133,8 +133,17 @@ def test_first_month_of_tracking_is_offered_from_its_first_balance(db: Session, 
     source = add_source(db, user, "Наличные", "USD")
     # первый снимок появился внутри июля — сверяем от него, а не с начала месяца
     funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 20))
+    funds.set_balance(db, user, source, Decimal("13500"), dt.date(2026, 7, 31))
 
     assert funds.pending_check_month(db, user, today) == dt.date(2026, 7, 1)
+
+
+def test_одинокий_стартовый_остаток_не_предлагается_к_сверке(db: Session, user: User):
+    today = dt.date(2026, 8, 3)
+    source = add_source(db, user, "Наличные", "USD")
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 31))
+
+    assert funds.pending_check_month(db, user, today) is None
 
 
 def test_month_without_balances_is_not_offered_for_check(db: Session, user: User):
@@ -241,3 +250,15 @@ def test_сохранённая_сверка_первого_месяца_счи�
     assert record.real_saldo == Decimal("500.00")
     # трата до отсечки в учтённое сальдо не попала
     assert record.tracked_saldo == Decimal("0.00")
+
+
+def test_единственный_снимок_в_месяце_не_даёт_сверки(db: Session, user: User, source: FundSource):
+    # стартовый остаток записан последним днём июля и больше в июле ничего нет:
+    # движение вышло бы нулевым, а погрешность — размером с месячный доход
+    funds.set_balance(db, user, source, Decimal("14000"), dt.date(2026, 7, 31))
+    budget.set_income(db, user, dt.date(2026, 7, 1), Decimal("4400"), None)
+
+    result = funds.month_check(db, user, dt.date(2026, 7, 1))
+
+    assert result.comparable is False
+    assert result.discrepancy == Decimal(0)
