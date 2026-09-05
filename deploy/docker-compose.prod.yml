@@ -79,10 +79,24 @@ services:
     # Пока web не поднят, caddy отдаёт 502 — это ок.
     ports:
       - "443:443"
+    # default обязателен: как только у сервиса появляется явный networks,
+    # compose перестаёт подключать его к сети проекта, и reverse_proxy web:3000
+    # перестал бы резолвиться. edge — общая сеть для соседних стеков.
+    networks:
+      - default
+      - edge
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # маршруты соседних стеков; см. import в Caddyfile
+      - /opt/edge-routes:/etc/caddy/conf.d:ro
       # выданные сертификаты; без volume каждый рестарт шёл бы за новым
       - caddy_data:/data
+
+# Общая сеть с соседними стеками этой машины; создаётся на сервере руками
+# (docker network create edge), поэтому external.
+networks:
+  edge:
+    external: true
 
 volumes:
   pgdata:
