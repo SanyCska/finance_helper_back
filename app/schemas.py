@@ -290,8 +290,8 @@ class FundsOut(BaseModel):
 class FundSourceIn(BaseModel):
     title: str = Field(min_length=1)
     currency: str = "USD"
-    #: сумма, с которой источник заводится
-    amount: Decimal = Field(default=Decimal(0), ge=0)
+    #: сумма, с которой источник заводится; долг пишут со знаком минус
+    amount: Decimal = Decimal(0)
 
     @field_validator("currency")
     @classmethod
@@ -310,7 +310,8 @@ class FundSourcePatch(BaseModel):
 
 
 class BalanceIn(BaseModel):
-    amount: Decimal = Field(ge=0)
+    #: отрицательная сумма — долг: источник не только копилка, но и кредитка
+    amount: Decimal
     date: dt.date | None = None
     note: str | None = None
 
@@ -350,7 +351,7 @@ class MonthCheckIn(BaseModel):
 
 
 class BalancePatch(BaseModel):
-    amount: Decimal | None = Field(default=None, ge=0)
+    amount: Decimal | None = None
     date: dt.date | None = None
     note: str | None = None
 

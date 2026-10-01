@@ -129,7 +129,7 @@ def create_source(
     db.refresh(source)
 
     balance = None
-    if payload.amount > 0:
+    if payload.amount != 0:
         balance = funds.set_balance(db, user, source, payload.amount, dt.date.today())
     return _source_out(funds.SourceState(source=source, balance=balance))
 

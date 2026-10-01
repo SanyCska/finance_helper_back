@@ -74,6 +74,17 @@ def test_new_balance_replaces_previous(client: TestClient):
     assert len(history) == 2
 
 
+def test_debt_is_a_negative_balance(client: TestClient):
+    client.post("/api/funds", json={"title": "Сербия", "amount": "1200"})
+    debt_id = client.post("/api/funds", json={"title": "Кредитка", "amount": "-300"}).json()["id"]
+
+    assert client.get("/api/funds").json()["total_base"] == "900.00"
+    assert client.get(f"/api/funds/{debt_id}/history").json()[0]["amount_original"] == "-300.0000"
+
+    client.put(f"/api/funds/{debt_id}/balance", json={"amount": "-450"})
+    assert client.get("/api/funds").json()["total_base"] == "750.00"
+
+
 def test_balance_in_future_is_rejected(client: TestClient):
     source_id = client.post("/api/funds", json={"title": "Сербия"}).json()["id"]
     tomorrow = (dt.date.today() + dt.timedelta(days=1)).isoformat()
